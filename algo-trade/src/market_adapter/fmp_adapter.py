@@ -68,10 +68,22 @@ class FMPMarketAdapter(MarketDataAdapter):
             try:
                 session = await self._get_session()
                 async with session.get(url, params=p) as resp:
+                    if resp.status == 401:
+                        raise PermissionError(
+                            "FMP API key invalid or endpoint requires a paid plan. "
+                            "Check your FMP_API_KEY and account tier at financialmodelingprep.com"
+                        )
                     resp.raise_for_status()
                     data = await resp.json()
                     self._failure_count = 0
                     return data
+            except PermissionError:
+                # 401 is a config error — do not retry, do not trigger circuit breaker.
+                log.error(
+                    "FMP auth failed — check FMP_API_KEY and account plan",
+                    endpoint=endpoint,
+                )
+                raise
             except Exception as exc:
                 self._failure_count += 1
                 log.warning(

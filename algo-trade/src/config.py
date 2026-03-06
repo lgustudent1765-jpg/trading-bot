@@ -2,8 +2,11 @@
 """
 Centralised configuration loader.
 
-Reads config.yaml, then applies environment-variable overrides.
-All modules import `get_config()` to access their settings.
+Load order (later overrides earlier):
+  1. Hard-coded defaults
+  2. config.yaml  (or CONFIG_PATH env var)
+  3. .env file    (or DOTENV_PATH env var)
+  4. Environment variables (ALGO_<SECTION>_<KEY>)
 """
 
 from __future__ import annotations
@@ -14,13 +17,28 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-
 _CONFIG: Optional[Dict[str, Any]] = None
 _CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
+_DOTENV_PATH = Path(os.getenv("DOTENV_PATH", ".env"))
+
+
+def _load_dotenv(path: Path) -> None:
+    """Parse a .env file and set values into os.environ (no overwrite)."""
+    if not path.exists():
+        return
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
 
 
 def _deep_merge(base: Dict, override: Dict) -> Dict:
-    """Recursively merge *override* into *base*, returning a new dict."""
     result = dict(base)
     for key, val in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
@@ -31,12 +49,7 @@ def _deep_merge(base: Dict, override: Dict) -> Dict:
 
 
 def _apply_env_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Apply environment-variable overrides for critical keys.
-
-    Naming convention: ALGO_<SECTION>_<KEY> (upper-cased).
-    Example: ALGO_SCREENER_TOP_N=15 overrides cfg['screener']['top_n'].
-    """
+    """Apply ALGO_<SECTION>_<KEY> environment variable overrides."""
     prefix = "ALGO_"
     for env_key, env_val in os.environ.items():
         if not env_key.startswith(prefix):
@@ -45,20 +58,28 @@ def _apply_env_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if len(parts) == 2:
             section, key = parts
             if section in cfg and isinstance(cfg[section], dict):
-                # Attempt numeric coercion.
-                try:
-                    cfg[section][key] = int(env_val)
-                except ValueError:
+                if env_val.lower() in ("true", "1", "yes"):
+                    cfg[section][key] = True
+                elif env_val.lower() in ("false", "0", "no"):
+                    cfg[section][key] = False
+                else:
                     try:
-                        cfg[section][key] = float(env_val)
+                        cfg[section][key] = int(env_val)
                     except ValueError:
-                        cfg[section][key] = env_val
+                        try:
+                            cfg[section][key] = float(env_val)
+                        except ValueError:
+                            cfg[section][key] = env_val
     return cfg
 
 
-def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load YAML configuration and apply environment overrides."""
+def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> Dict[str, Any]:
+    """Load configuration from YAML + .env + environment variables."""
     global _CONFIG
+
+    # Load .env first so its values are available when building defaults.
+    _load_dotenv(dotenv or _DOTENV_PATH)
+
     config_path = path or _CONFIG_PATH
     if config_path.exists():
         with config_path.open() as fh:
@@ -66,13 +87,13 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
     else:
         raw = {}
 
-    # Provide hard-coded defaults so the system runs without a config file.
     defaults: Dict[str, Any] = {
         "mode": os.getenv("MODE", "paper"),
         "screener": {
             "top_n": 10,
             "poll_interval_seconds": 60,
-            "provider": "fmp",
+            "provider": os.getenv("ALGO_SCREENER_PROVIDER", "yahoo"),
+            "market_hours_only": True,
         },
         "options_filter": {
             "min_volume": 100,
@@ -91,6 +112,7 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
             "macd_signal": 9,
             "atr_period": 14,
             "lookback_bars": 50,
+            "signal_cooldown_minutes": 30,
         },
         "risk": {
             "max_position_pct": 0.05,
@@ -100,30 +122,44 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
             "take_profit_atr_mult": 3.0,
         },
         "broker": {
-            "name": "mock",
+            "name": os.getenv("BROKER", "mock"),
             "webull": {
-                "device_id": os.getenv("WEBULL_DEVICE_ID", ""),
-                "access_token": os.getenv("WEBULL_ACCESS_TOKEN", ""),
+                "device_id":     os.getenv("WEBULL_DEVICE_ID", ""),
+                "access_token":  os.getenv("WEBULL_ACCESS_TOKEN", ""),
                 "refresh_token": os.getenv("WEBULL_REFRESH_TOKEN", ""),
-                "trade_token": os.getenv("WEBULL_TRADE_TOKEN", ""),
-                "account_id": os.getenv("WEBULL_ACCOUNT_ID", ""),
+                "trade_token":   os.getenv("WEBULL_TRADE_TOKEN", ""),
+                "account_id":    os.getenv("WEBULL_ACCOUNT_ID", ""),
             },
         },
         "market_data": {
-            "fmp_api_key": os.getenv("FMP_API_KEY", ""),
-            "base_url": "https://financialmodelingprep.com/api/v3",
+            "fmp_api_key":    os.getenv("FMP_API_KEY", ""),
+            "base_url":       "https://financialmodelingprep.com/api/v3",
             "request_timeout": 10,
-            "retry_max": 3,
-            "retry_backoff": 2.0,
+            "retry_max":      3,
+            "retry_backoff":  2.0,
         },
         "logging": {
-            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "level":       os.getenv("LOG_LEVEL", "INFO"),
             "json_format": True,
-            "log_file": os.getenv("LOG_FILE", ""),
+            "log_file":    os.getenv("LOG_FILE", "logs/algo-trade.log"),
         },
         "api_server": {
             "host": "0.0.0.0",
             "port": int(os.getenv("API_PORT", "8080")),
+        },
+        "notifications": {
+            "email": {
+                "enabled":   False,
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "username":  os.getenv("NOTIFY_EMAIL_USER", ""),
+                "password":  os.getenv("NOTIFY_EMAIL_PASS", ""),
+                "recipient": os.getenv("NOTIFY_EMAIL_USER", ""),
+            },
+            "webhook": {
+                "enabled": False,
+                "url":     os.getenv("NOTIFY_WEBHOOK_URL", ""),
+            },
         },
     }
 
@@ -134,7 +170,6 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def get_config() -> Dict[str, Any]:
-    """Return the cached configuration, loading it on first call."""
     global _CONFIG
     if _CONFIG is None:
         _CONFIG = load_config()

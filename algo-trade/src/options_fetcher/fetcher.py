@@ -116,7 +116,7 @@ class OptionsFetcher:
     async def _process_candidate(self, symbol: str, spot: float) -> None:
         """Fetch and filter options for a single symbol."""
         try:
-            raw_contracts = await self._broker.get_option_chain(symbol)
+            raw_contracts = await self._broker.get_option_chain(symbol, underlying_price=spot)
             filtered = apply_liquidity_filter(
                 raw_contracts,
                 spot=spot,

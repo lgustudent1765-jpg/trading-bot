@@ -29,6 +29,7 @@ def screener_config() -> Dict[str, Any]:
             "top_n": 5,
             "poll_interval_seconds": 0.1,
             "provider": "mock",
+            "market_hours_only": False,  # disable in tests
         }
     }
 
@@ -68,7 +69,7 @@ class TestScreener:
     async def test_screener_updates_within_interval(self, mock_adapter):
         """Two events must be produced within 2 * poll_interval."""
         config = {
-            "screener": {"top_n": 3, "poll_interval_seconds": 0.05, "provider": "mock"}
+            "screener": {"top_n": 3, "poll_interval_seconds": 0.05, "provider": "mock", "market_hours_only": False}
         }
         queue: asyncio.Queue = asyncio.Queue()
         screener = Screener(mock_adapter, queue, config)

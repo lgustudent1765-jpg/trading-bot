@@ -22,10 +22,12 @@ class BrokerAdapter(abc.ABC):
     # ------------------------------------------------------------------ #
 
     @abc.abstractmethod
-    async def get_option_chain(self, symbol: str) -> List[OptionContract]:
+    async def get_option_chain(self, symbol: str, underlying_price: float = 0.0) -> List[OptionContract]:
         """
         Return all available option contracts for *symbol*.
 
+        underlying_price: current spot price — used by mock adapters to generate
+        realistic strikes. Real broker adapters may ignore this parameter.
         The caller (OptionsFetcher) applies liquidity filters afterward.
         """
 

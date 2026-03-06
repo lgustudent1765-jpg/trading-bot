@@ -1,44 +1,36 @@
 # file: src/logger/logger.py
 """
-Structured JSON logger with sensitive-field redaction.
-
-Usage:
-    from src.logger import get_logger
-    log = get_logger(__name__)
-    log.info("order placed", order_id="abc123", symbol="AAPL")
+Structured JSON logger with:
+  - Sensitive-field redaction
+  - Rotating file handler (10 MB per file, 5 backups)
+  - Console + file output
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
 import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
-# Fields that must never appear in logs in plain text.
 _REDACTED_FIELDS: Set[str] = {
-    "api_key",
-    "fmp_api_key",
-    "access_token",
-    "refresh_token",
-    "trade_token",
-    "password",
-    "secret",
-    "authorization",
-    "device_id",
+    "api_key", "fmp_api_key", "access_token", "refresh_token",
+    "trade_token", "password", "secret", "authorization",
+    "device_id", "notify_email_pass", "notify_email_user",
+    "webhook_url",
 }
 
 _SECRET_PATTERN = re.compile(
-    r"(api[_-]?key|token|secret|password)[=:\"'\s]+\S+",
+    r"(api[_-]?key|token|secret|password|webhook)[=:\"'\s]+\S+",
     re.IGNORECASE,
 )
 
 
 def _redact_dict(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a shallow copy of *data* with sensitive values replaced."""
     result = {}
     for k, v in data.items():
         if k.lower() in _REDACTED_FIELDS:
@@ -53,8 +45,6 @@ def _redact_dict(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class _JsonFormatter(logging.Formatter):
-    """Formats log records as single-line JSON objects."""
-
     def format(self, record: logging.LogRecord) -> str:
         payload: Dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
@@ -62,7 +52,6 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        # Extra context fields added via log.info(..., key=val) or extra={}.
         for key, val in record.__dict__.items():
             if key.startswith("_") or key in (
                 "msg", "args", "levelname", "levelno", "pathname", "filename",
@@ -72,38 +61,26 @@ class _JsonFormatter(logging.Formatter):
             ):
                 continue
             payload[key] = val
-
         payload = _redact_dict(payload)
-
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
-
         return json.dumps(payload)
 
 
 class _ContextAdapter(logging.LoggerAdapter):
-    """Allows structured keyword arguments on every log call."""
-
-    def process(self, msg: Any, kwargs: Dict) -> tuple:
-        extra = kwargs.pop("extra", {})
-        # Merge ad-hoc kwargs into extra so they appear in the JSON record.
-        extra.update(kwargs.pop("_ctx", {}))
-        kwargs["extra"] = extra
-        return msg, kwargs
-
     def _log_with_ctx(self, level: int, msg: Any, **ctx: Any) -> None:
         self.log(level, msg, extra=ctx)
 
-    def info(self, msg: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    def info(self, msg: Any, *args: Any, **kwargs: Any) -> None:       # type: ignore[override]
         self._log_with_ctx(logging.INFO, msg, **kwargs)
 
-    def debug(self, msg: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    def debug(self, msg: Any, *args: Any, **kwargs: Any) -> None:      # type: ignore[override]
         self._log_with_ctx(logging.DEBUG, msg, **kwargs)
 
-    def warning(self, msg: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    def warning(self, msg: Any, *args: Any, **kwargs: Any) -> None:    # type: ignore[override]
         self._log_with_ctx(logging.WARNING, msg, **kwargs)
 
-    def error(self, msg: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    def error(self, msg: Any, *args: Any, **kwargs: Any) -> None:      # type: ignore[override]
         self._log_with_ctx(logging.ERROR, msg, **kwargs)
 
     def exception(self, msg: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
@@ -114,7 +91,13 @@ class _ContextAdapter(logging.LoggerAdapter):
 _configured = False
 
 
-def _configure_root(level: str = "INFO", log_file: Optional[str] = None, json_format: bool = True) -> None:
+def _configure_root(
+    level: str = "INFO",
+    log_file: Optional[str] = None,
+    json_format: bool = True,
+    max_bytes: int = 10 * 1024 * 1024,  # 10 MB
+    backup_count: int = 5,
+) -> None:
     global _configured
     if _configured:
         return
@@ -123,27 +106,29 @@ def _configure_root(level: str = "INFO", log_file: Optional[str] = None, json_fo
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    formatter: logging.Formatter = _JsonFormatter() if json_format else logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    json_fmt  = _JsonFormatter()
+    plain_fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    formatter = json_fmt if json_format else plain_fmt
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    root.addHandler(console_handler)
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(formatter)
+    root.addHandler(console)
 
     if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        root.addHandler(file_handler)
+        log_path = os.path.abspath(log_file)
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(
+            log_path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        fh.setFormatter(json_fmt)  # always JSON in file
+        root.addHandler(fh)
 
 
 def get_logger(name: str) -> _ContextAdapter:
-    """
-    Return a structured logger for *name*.
-
-    Configuration is read from src.config on first call.
-    Falls back to INFO / stdout if config is unavailable.
-    """
+    """Return a structured logger for *name*."""
     try:
         from src.config import get_config
         cfg = get_config().get("logging", {})
@@ -154,5 +139,4 @@ def get_logger(name: str) -> _ContextAdapter:
         )
     except Exception:
         _configure_root()
-
     return _ContextAdapter(logging.getLogger(name), {})

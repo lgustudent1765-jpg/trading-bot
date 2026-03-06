@@ -2,11 +2,9 @@
 """
 Market screener — produces top-N gainers and losers every poll_interval seconds.
 
-Publishes CandidateEvent objects to an asyncio.Queue for downstream consumers
-(options_fetcher, strategy_engine).
-
-Architecture note: The Screener wraps poll_loop and a MarketDataAdapter;
-swap the adapter to change the data source without touching this class.
+Production features:
+  - Market-hours gate: waits for NYSE open before polling (configurable)
+  - Publishes CandidateEvent to asyncio.Queue for downstream consumers
 """
 
 from __future__ import annotations
@@ -17,22 +15,12 @@ from typing import Any, Dict
 from src.events import CandidateEvent
 from src.logger import get_logger
 from src.market_adapter.base import MarketDataAdapter
-from src.market_adapter.poller import poll_loop
+from src.market_hours import is_market_open, wait_for_market_open
 
 log = get_logger(__name__)
 
 
 class Screener:
-    """
-    Polls a MarketDataAdapter and publishes CandidateEvent objects.
-
-    Parameters
-    ----------
-    adapter          : concrete MarketDataAdapter implementation.
-    candidate_queue  : asyncio.Queue[CandidateEvent] consumed by downstream.
-    config           : application configuration dict.
-    """
-
     def __init__(
         self,
         adapter: MarketDataAdapter,
@@ -44,9 +32,9 @@ class Screener:
         scr_cfg = config.get("screener", {})
         self._top_n: int = int(scr_cfg.get("top_n", 10))
         self._interval: float = float(scr_cfg.get("poll_interval_seconds", 60))
+        self._market_hours_only: bool = bool(scr_cfg.get("market_hours_only", True))
 
     async def _fetch(self) -> CandidateEvent:
-        """Fetch gainers/losers and package them as a CandidateEvent."""
         gainers, losers = await asyncio.gather(
             self._adapter.get_top_gainers(self._top_n),
             self._adapter.get_top_losers(self._top_n),
@@ -60,15 +48,19 @@ class Screener:
         return event
 
     async def run(self) -> None:
-        """Start the polling loop; runs indefinitely until cancelled."""
-        log.info(
-            "screener started",
-            top_n=self._top_n,
-            interval_secs=self._interval,
-        )
-        await poll_loop(
-            fetch_fn=self._fetch,
-            queue=self._queue,
-            interval=self._interval,
-            name="screener",
-        )
+        log.info("screener started", top_n=self._top_n, interval_secs=self._interval)
+        while True:
+            try:
+                if self._market_hours_only and not is_market_open():
+                    await wait_for_market_open(log)
+
+                event = await self._fetch()
+                await self._queue.put(event)
+                await asyncio.sleep(self._interval)
+
+            except asyncio.CancelledError:
+                log.info("screener cancelled")
+                return
+            except Exception as exc:
+                log.error("screener error", error=str(exc))
+                await asyncio.sleep(30)

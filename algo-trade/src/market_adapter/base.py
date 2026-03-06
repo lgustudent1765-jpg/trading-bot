@@ -58,5 +58,8 @@ def create_market_adapter(config: Dict[str, Any]) -> MarketDataAdapter:
     if provider == "fmp":
         from src.market_adapter.fmp_adapter import FMPMarketAdapter
         return FMPMarketAdapter(config)
+    if provider == "yahoo":
+        from src.market_adapter.yahoo_adapter import YahooFinanceAdapter
+        return YahooFinanceAdapter(config)
     from src.market_adapter.mock_market import MockMarketAdapter
     return MockMarketAdapter()

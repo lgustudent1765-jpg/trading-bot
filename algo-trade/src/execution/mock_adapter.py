@@ -62,8 +62,8 @@ class MockBrokerAdapter(BrokerAdapter):
         self._equity = equity
         self._orders: Dict[str, OrderEvent] = {}
 
-    async def get_option_chain(self, symbol: str) -> List[OptionContract]:
-        return _make_chain(symbol)
+    async def get_option_chain(self, symbol: str, underlying_price: float = 0.0) -> List[OptionContract]:
+        return _make_chain(symbol, spot=underlying_price if underlying_price > 0 else 150.0)
 
     async def place_limit_order(
         self,

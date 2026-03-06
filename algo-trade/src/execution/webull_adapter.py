@@ -80,7 +80,7 @@ class WebullAdapter(BrokerAdapter):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(_EXECUTOR, partial(fn, *args, **kwargs))
 
-    async def get_option_chain(self, symbol: str) -> List[OptionContract]:
+    async def get_option_chain(self, symbol: str, underlying_price: float = 0.0) -> List[OptionContract]:
         """
         Fetch option chain from Webull.
 

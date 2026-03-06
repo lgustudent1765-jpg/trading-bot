@@ -1,82 +1,74 @@
 # file: config.yaml.template
-# ============================================================
-# Algo-Trade Configuration Template
-# ============================================================
-# Copy this file to config.yaml and fill in your values.
-# CRITICAL keys are marked with [CRITICAL].
-# All values can be overridden by environment variables using
-# the pattern ALGO_<SECTION>_<KEY> (uppercase).
-# Example: ALGO_SCREENER_TOP_N=15
-# ============================================================
+# Production configuration template. Copy to config.yaml.
+# Secrets must go in .env — never here.
 
-# ---- Operating mode ----------------------------------------
-# Choices: paper | manual | automated
-# [CRITICAL] Always start with 'paper' until strategy is validated.
-mode: paper
+mode: paper   # paper | manual | automated
 
-# ---- Screener ----------------------------------------------
 screener:
-  top_n: 10                        # Number of top gainers/losers to track
-  poll_interval_seconds: 60        # How often to refresh the candidate list (≤60)
-  provider: fmp                    # 'fmp' (production) | 'mock' (testing)
+  top_n: 10
+  poll_interval_seconds: 60
+  provider: yahoo           # yahoo | fmp | mock
+  market_hours_only: true   # only run 9:30–4:00 ET, Mon–Fri
 
-# ---- Options liquidity filter ------------------------------
 options_filter:
-  min_volume: 100                  # Minimum daily option volume
-  min_open_interest: 500           # Minimum open interest
-  max_spread_pct: 0.10             # Max (ask-bid)/mid as a fraction (10%)
-  max_dte: 30                      # Maximum days to expiry
-  min_dte: 1                       # Minimum days to expiry (avoid 0DTE risk)
-  max_otm_pct: 0.15                # Maximum fraction OTM (15%)
+  min_volume: 100
+  min_open_interest: 500
+  max_spread_pct: 0.10
+  max_dte: 30
+  min_dte: 1
+  max_otm_pct: 0.15
 
-# ---- Momentum indicators -----------------------------------
 indicators:
   rsi_period: 14
-  rsi_overbought: 70               # RSI > this -> consider CALL
-  rsi_oversold: 30                 # RSI < this -> consider PUT
+  rsi_overbought: 70
+  rsi_oversold: 30
   macd_fast: 12
   macd_slow: 26
   macd_signal: 9
   atr_period: 14
-  lookback_bars: 50                # Number of 1-min bars to fetch for indicators
+  lookback_bars: 50
+  signal_cooldown_minutes: 30   # min wait before re-signalling same ticker
 
-# ---- Risk management ---------------------------------------
 risk:
-  max_position_pct: 0.05           # Max % of equity per position (5%)
-  max_open_positions: 5            # Maximum concurrent open positions
-  pdt_equity_threshold: 25000      # USD equity below which PDT rules apply
-  stop_loss_atr_mult: 1.5          # stop = entry ± (ATR × this)
-  take_profit_atr_mult: 3.0        # target = entry ± (ATR × this)
+  max_position_pct: 0.05        # max % of equity per trade
+  max_open_positions: 5
+  pdt_equity_threshold: 25000
+  stop_loss_atr_mult: 1.5
+  take_profit_atr_mult: 3.0
 
-# ---- Broker ------------------------------------------------
 broker:
-  name: mock                       # 'mock' | 'webull' | 'robinhood'
+  name: mock                    # mock | webull
   webull:
-    # [CRITICAL] Do NOT put credentials here — use environment variables.
-    # Set: WEBULL_DEVICE_ID, WEBULL_ACCESS_TOKEN, WEBULL_REFRESH_TOKEN,
-    #      WEBULL_TRADE_TOKEN, WEBULL_ACCOUNT_ID
-    device_id: ""
+    device_id: ""               # set via WEBULL_DEVICE_ID in .env
     access_token: ""
     refresh_token: ""
     trade_token: ""
     account_id: ""
 
-# ---- Market data -------------------------------------------
 market_data:
-  # [CRITICAL] Set FMP_API_KEY environment variable — do not put key here.
-  fmp_api_key: ""
+  fmp_api_key: ""               # set via FMP_API_KEY in .env
   base_url: "https://financialmodelingprep.com/api/v3"
-  request_timeout: 10              # HTTP timeout in seconds
-  retry_max: 3                     # Max retry attempts on failure
-  retry_backoff: 2.0               # Backoff multiplier (exponential)
+  request_timeout: 10
+  retry_max: 3
+  retry_backoff: 2.0
 
-# ---- Logging -----------------------------------------------
 logging:
-  level: INFO                      # DEBUG | INFO | WARNING | ERROR
-  json_format: true                # true = JSON lines; false = human-readable
-  log_file: ""                     # Empty = stdout only; set path for file logging
+  level: INFO
+  json_format: true
+  log_file: logs/algo-trade.log  # rotates at 10 MB, keeps 5 backups
 
-# ---- API server --------------------------------------------
 api_server:
   host: "0.0.0.0"
   port: 8080
+
+notifications:
+  email:
+    enabled: false              # set to true and configure .env to enable
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    username: ""                # set via NOTIFY_EMAIL_USER in .env
+    password: ""                # set via NOTIFY_EMAIL_PASS in .env
+    recipient: ""               # defaults to username if blank
+  webhook:
+    enabled: false
+    url: ""                     # set via NOTIFY_WEBHOOK_URL in .env
