@@ -1,0 +1,77 @@
+# file: docker-compose.yml
+# ============================================================
+# Docker Compose for development and paper-trade profiles.
+#
+# Usage:
+#   Paper-trade (default):  docker-compose up
+#   Manual mode:            docker-compose --profile manual up
+#   Backtest:               docker-compose --profile backtest up
+# ============================================================
+
+version: "3.9"
+
+services:
+  algo-trade:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: algo-trade:latest
+    container_name: algo-trade
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MODE=${MODE:-paper}
+      - CONFIG_PATH=/app/config.yaml
+    volumes:
+      # Mount config and logs as writable volumes.
+      - ./config.yaml:/app/config.yaml:ro
+      - algo-logs:/app/logs
+    ports:
+      - "${API_PORT:-8080}:8080"
+    command: ["--mode", "${MODE:-paper}"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # --- Manual mode profile ---
+  algo-trade-manual:
+    profiles: ["manual"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: algo-trade:latest
+    container_name: algo-trade-manual
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MODE=manual
+      - CONFIG_PATH=/app/config.yaml
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "8081:8080"
+    command: ["--mode", "manual"]
+
+  # --- Backtest profile ---
+  algo-trade-backtest:
+    profiles: ["backtest"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: algo-trade:latest
+    container_name: algo-trade-backtest
+    restart: "no"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./sample_data:/app/sample_data:ro
+    command: ["--mode", "backtest", "--data", "sample_data/minute_sample.csv"]
+
+volumes:
+  algo-logs:
+    driver: local

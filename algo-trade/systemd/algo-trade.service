@@ -1,0 +1,54 @@
+# file: systemd/algo-trade.service
+# ============================================================
+# systemd unit file for continuous background operation.
+#
+# Install:
+#   sudo cp systemd/algo-trade.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable algo-trade
+#   sudo systemctl start algo-trade
+#
+# Logs:
+#   sudo journalctl -u algo-trade -f
+# ============================================================
+
+[Unit]
+Description=Algorithmic Options Trading System (Paper-Trade)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+WorkingDirectory=/opt/algo-trade
+
+# Load environment from a secured file (chmod 600).
+EnvironmentFile=/opt/algo-trade/.env
+
+# Activate virtual environment before running.
+ExecStart=/opt/algo-trade/.venv/bin/python -m src.cli.main --mode paper
+
+# Restart policy: always restart on failure, with 10 s delay.
+Restart=always
+RestartSec=10
+
+# Security hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/algo-trade/logs
+
+# Resource limits.
+LimitNOFILE=65536
+
+# Output structured logs to journald (captured as JSON lines).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=algo-trade
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,82 @@
+# file: config.yaml.template
+# ============================================================
+# Algo-Trade Configuration Template
+# ============================================================
+# Copy this file to config.yaml and fill in your values.
+# CRITICAL keys are marked with [CRITICAL].
+# All values can be overridden by environment variables using
+# the pattern ALGO_<SECTION>_<KEY> (uppercase).
+# Example: ALGO_SCREENER_TOP_N=15
+# ============================================================
+
+# ---- Operating mode ----------------------------------------
+# Choices: paper | manual | automated
+# [CRITICAL] Always start with 'paper' until strategy is validated.
+mode: paper
+
+# ---- Screener ----------------------------------------------
+screener:
+  top_n: 10                        # Number of top gainers/losers to track
+  poll_interval_seconds: 60        # How often to refresh the candidate list (≤60)
+  provider: fmp                    # 'fmp' (production) | 'mock' (testing)
+
+# ---- Options liquidity filter ------------------------------
+options_filter:
+  min_volume: 100                  # Minimum daily option volume
+  min_open_interest: 500           # Minimum open interest
+  max_spread_pct: 0.10             # Max (ask-bid)/mid as a fraction (10%)
+  max_dte: 30                      # Maximum days to expiry
+  min_dte: 1                       # Minimum days to expiry (avoid 0DTE risk)
+  max_otm_pct: 0.15                # Maximum fraction OTM (15%)
+
+# ---- Momentum indicators -----------------------------------
+indicators:
+  rsi_period: 14
+  rsi_overbought: 70               # RSI > this -> consider CALL
+  rsi_oversold: 30                 # RSI < this -> consider PUT
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  atr_period: 14
+  lookback_bars: 50                # Number of 1-min bars to fetch for indicators
+
+# ---- Risk management ---------------------------------------
+risk:
+  max_position_pct: 0.05           # Max % of equity per position (5%)
+  max_open_positions: 5            # Maximum concurrent open positions
+  pdt_equity_threshold: 25000      # USD equity below which PDT rules apply
+  stop_loss_atr_mult: 1.5          # stop = entry ± (ATR × this)
+  take_profit_atr_mult: 3.0        # target = entry ± (ATR × this)
+
+# ---- Broker ------------------------------------------------
+broker:
+  name: mock                       # 'mock' | 'webull' | 'robinhood'
+  webull:
+    # [CRITICAL] Do NOT put credentials here — use environment variables.
+    # Set: WEBULL_DEVICE_ID, WEBULL_ACCESS_TOKEN, WEBULL_REFRESH_TOKEN,
+    #      WEBULL_TRADE_TOKEN, WEBULL_ACCOUNT_ID
+    device_id: ""
+    access_token: ""
+    refresh_token: ""
+    trade_token: ""
+    account_id: ""
+
+# ---- Market data -------------------------------------------
+market_data:
+  # [CRITICAL] Set FMP_API_KEY environment variable — do not put key here.
+  fmp_api_key: ""
+  base_url: "https://financialmodelingprep.com/api/v3"
+  request_timeout: 10              # HTTP timeout in seconds
+  retry_max: 3                     # Max retry attempts on failure
+  retry_backoff: 2.0               # Backoff multiplier (exponential)
+
+# ---- Logging -----------------------------------------------
+logging:
+  level: INFO                      # DEBUG | INFO | WARNING | ERROR
+  json_format: true                # true = JSON lines; false = human-readable
+  log_file: ""                     # Empty = stdout only; set path for file logging
+
+# ---- API server --------------------------------------------
+api_server:
+  host: "0.0.0.0"
+  port: 8080
