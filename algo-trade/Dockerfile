@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # Stage 2: Next.js standalone build
 FROM node:20-slim AS fe-builder
 WORKDIR /app
-COPY frontend/package*.json ./
+COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ .
 # Rewrites proxy /api/* → backend on localhost:8181 (baked in at build time)
