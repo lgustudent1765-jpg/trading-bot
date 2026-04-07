@@ -1,21 +1,10 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useState, useCallback } from "react";
 import { ToastContainer, type ToastData } from "@/components/ui/toast";
 import { MaskedContext } from "@/lib/masked-context";
-
-// Skip SSR for components that use usePathname / navigation hooks.
-// This prevents the workUnitAsyncStorage invariant during /_global-error prerender.
-const Sidebar = dynamic(
-  () => import("@/components/layout/sidebar").then((m) => m.Sidebar),
-  { ssr: false }
-);
-
-const Topbar = dynamic(
-  () => import("@/components/layout/topbar").then((m) => m.Topbar),
-  { ssr: false }
-);
+import { Sidebar } from "@/components/layout/sidebar";
+import { Topbar } from "@/components/layout/topbar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [masked, setMasked] = useState(true);

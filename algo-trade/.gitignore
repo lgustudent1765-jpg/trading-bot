@@ -27,3 +27,9 @@ yarn-error.log*
 # Next.js
 frontend/.next/
 frontend/out/
+
+
+#claude
+.claude
+.claude-flow
+CLAUDE.md
