@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
+from src.config import get_config
 from src.logger import get_logger
 from src.market_hours import is_market_open, now_et
 
@@ -33,11 +34,14 @@ def create_app(
 ) -> web.Application:
 
     async def health(request: web.Request) -> web.Response:
+        cfg = get_config()
         return web.json_response({
             "status": "ok",
             "uptime_s": round(time.time() - _START_TIME, 1),
             "market_open": is_market_open(),
             "market_time_et": now_et().strftime("%Y-%m-%d %H:%M:%S ET"),
+            "mode": cfg.get("mode", "paper"),
+            "broker": cfg.get("broker", {}).get("name", "mock"),
         })
 
     async def get_signals(request: web.Request) -> web.Response:

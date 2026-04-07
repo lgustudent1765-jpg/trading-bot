@@ -8,6 +8,8 @@ export interface Health {
   uptime_s: number;
   market_open: boolean;
   market_time_et: string;
+  mode: string;
+  broker: string;
 }
 
 export interface Metrics {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { Eye, EyeOff, Bell, ChevronDown, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
+import { api } from "@/lib/api";
 
 const PAGE_META: Record<string, { title: string; description: string }> = {
   "/dashboard":  { title: "Dashboard",   description: "Your portfolio overview and live market data" },
@@ -22,7 +23,12 @@ interface TopbarProps {
 
 export function Topbar({ masked, onToggleMask }: TopbarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
   const pathname = usePathname() ?? "";
+
+  useEffect(() => {
+    api.health().then((h) => setIsDemo(h.broker === "mock")).catch(() => {});
+  }, []);
   const meta = PAGE_META[pathname] ?? { title: "AlgoTrade", description: "" };
 
   return (
@@ -39,11 +45,13 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
 
       {/* Right: controls */}
       <div className="flex items-center gap-2 shrink-0">
-        {/* Demo mode badge */}
-        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
-          <span className="text-xs text-amber-400 font-medium">Demo Mode</span>
-        </div>
+        {/* Demo mode badge — only shown when broker=mock */}
+        {isDemo && (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
+            <span className="text-xs text-amber-400 font-medium">Demo Mode</span>
+          </div>
+        )}
 
         {/* Market status */}
         <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40">
