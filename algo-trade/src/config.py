@@ -182,3 +182,17 @@ def get_config() -> Dict[str, Any]:
     if _CONFIG is None:
         _CONFIG = load_config()
     return _CONFIG
+
+
+def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge *updates* into the live in-memory config (no restart required).
+
+    Changes are applied immediately but are not persisted to disk, so they
+    will be lost on the next container restart or redeploy.  Set Railway
+    environment variables for permanent changes.
+    """
+    global _CONFIG
+    if _CONFIG is None:
+        _CONFIG = load_config()
+    _CONFIG = _deep_merge(_CONFIG, updates)
+    return _CONFIG

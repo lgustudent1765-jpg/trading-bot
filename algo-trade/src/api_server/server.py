@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
-from src.config import get_config
+from src.config import get_config, update_config
 from src.logger import get_logger
 from src.market_hours import is_market_open, now_et
 
@@ -167,11 +167,100 @@ def create_app(
 </body></html>"""
         return web.Response(text=html, content_type="text/html")
 
+    def _mask(value: str) -> str:
+        """Return a masked version of a secret string."""
+        return ("*" * 8) if value else ""
+
+    async def get_config_endpoint(request: web.Request) -> web.Response:
+        cfg = get_config()
+        broker = cfg.get("broker", {})
+        wb = broker.get("webull", {})
+        screener = cfg.get("screener", {})
+        risk = cfg.get("risk", {})
+        market_data = cfg.get("market_data", {})
+        notif = cfg.get("notifications", {})
+        email = notif.get("email", {})
+        webhook = notif.get("webhook", {})
+        return web.json_response({
+            "mode": cfg.get("mode", "paper"),
+            "broker_name": broker.get("name", "mock"),
+            "screener_provider": screener.get("provider", "yahoo"),
+            "screener_poll_interval_seconds": screener.get("poll_interval_seconds", 60),
+            "screener_top_n": screener.get("top_n", 10),
+            "screener_market_hours_only": screener.get("market_hours_only", True),
+            "fmp_api_key_set": bool(market_data.get("fmp_api_key", "")),
+            "risk_max_position_pct": risk.get("max_position_pct", 0.05),
+            "risk_max_open_positions": risk.get("max_open_positions", 5),
+            "risk_pdt_equity_threshold": risk.get("pdt_equity_threshold", 25000),
+            "risk_stop_loss_atr_mult": risk.get("stop_loss_atr_mult", 1.5),
+            "risk_take_profit_atr_mult": risk.get("take_profit_atr_mult", 3.0),
+            "notify_email_enabled": email.get("enabled", False),
+            "notify_email_username": email.get("username", ""),
+            "notify_email_recipient": email.get("recipient", ""),
+            "notify_webhook_enabled": webhook.get("enabled", False),
+            "notify_webhook_url": webhook.get("url", ""),
+            "webull_device_id": _mask(wb.get("device_id", "")),
+            "webull_account_id": wb.get("account_id", ""),
+        })
+
+    async def post_config_endpoint(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        # Build a nested updates dict from the flat payload
+        updates: Dict[str, Any] = {}
+
+        def _set(keys: list, val: Any) -> None:
+            d = updates
+            for k in keys[:-1]:
+                d = d.setdefault(k, {})
+            d[keys[-1]] = val
+
+        mapping = {
+            "mode":                         ["mode"],
+            "broker_name":                  ["broker", "name"],
+            "screener_provider":            ["screener", "provider"],
+            "screener_poll_interval_seconds": ["screener", "poll_interval_seconds"],
+            "screener_top_n":               ["screener", "top_n"],
+            "screener_market_hours_only":   ["screener", "market_hours_only"],
+            "fmp_api_key":                  ["market_data", "fmp_api_key"],
+            "risk_max_position_pct":        ["risk", "max_position_pct"],
+            "risk_max_open_positions":      ["risk", "max_open_positions"],
+            "risk_pdt_equity_threshold":    ["risk", "pdt_equity_threshold"],
+            "risk_stop_loss_atr_mult":      ["risk", "stop_loss_atr_mult"],
+            "risk_take_profit_atr_mult":    ["risk", "take_profit_atr_mult"],
+            "notify_email_enabled":         ["notifications", "email", "enabled"],
+            "notify_email_username":        ["notifications", "email", "username"],
+            "notify_email_password":        ["notifications", "email", "password"],
+            "notify_email_recipient":       ["notifications", "email", "recipient"],
+            "notify_webhook_enabled":       ["notifications", "webhook", "enabled"],
+            "notify_webhook_url":           ["notifications", "webhook", "url"],
+            "webull_device_id":             ["broker", "webull", "device_id"],
+            "webull_access_token":          ["broker", "webull", "access_token"],
+            "webull_refresh_token":         ["broker", "webull", "refresh_token"],
+            "webull_trade_token":           ["broker", "webull", "trade_token"],
+            "webull_account_id":            ["broker", "webull", "account_id"],
+        }
+
+        for flat_key, path in mapping.items():
+            if flat_key in body:
+                _set(path, body[flat_key])
+
+        if not updates:
+            return web.json_response({"error": "no recognised fields"}, status=400)
+
+        update_config(updates)
+        return web.json_response({"ok": True})
+
     app = web.Application()
     app.router.add_get("/health",    health)
     app.router.add_get("/signals",   get_signals)
     app.router.add_get("/positions", get_positions)
     app.router.add_get("/metrics",   get_metrics)
+    app.router.add_get("/config",    get_config_endpoint)
+    app.router.add_post("/config",   post_config_endpoint)
     app.router.add_get("/",          dashboard)
     return app
 

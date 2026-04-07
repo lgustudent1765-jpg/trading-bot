@@ -49,6 +49,33 @@ export interface Signal {
   ts: string;
 }
 
+export interface ConfigPayload {
+  mode?: string;
+  broker_name?: string;
+  screener_provider?: string;
+  screener_poll_interval_seconds?: number;
+  screener_top_n?: number;
+  screener_market_hours_only?: boolean;
+  fmp_api_key?: string;
+  fmp_api_key_set?: boolean;
+  risk_max_position_pct?: number;
+  risk_max_open_positions?: number;
+  risk_pdt_equity_threshold?: number;
+  risk_stop_loss_atr_mult?: number;
+  risk_take_profit_atr_mult?: number;
+  notify_email_enabled?: boolean;
+  notify_email_username?: string;
+  notify_email_password?: string;
+  notify_email_recipient?: string;
+  notify_webhook_enabled?: boolean;
+  notify_webhook_url?: string;
+  webull_device_id?: string;
+  webull_access_token?: string;
+  webull_refresh_token?: string;
+  webull_trade_token?: string;
+  webull_account_id?: string;
+}
+
 async function fetchJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`API ${path} returned ${res.status}`);
@@ -56,10 +83,16 @@ async function fetchJSON<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  health:    ()             => fetchJSON<Health>("/health"),
-  metrics:   ()             => fetchJSON<Metrics>("/metrics"),
-  positions: ()             => fetchJSON<PositionsResponse>("/positions"),
-  signals:   (limit = 100) => fetchJSON<Signal[]>(`/signals?limit=${limit}`),
+  health:       ()                        => fetchJSON<Health>("/health"),
+  metrics:      ()                        => fetchJSON<Metrics>("/metrics"),
+  positions:    ()                        => fetchJSON<PositionsResponse>("/positions"),
+  signals:      (limit = 100)             => fetchJSON<Signal[]>(`/signals?limit=${limit}`),
+  getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
+  updateConfig: (payload: ConfigPayload)  => fetch(`${API_BASE}/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => { if (!r.ok) throw new Error(`config update failed: ${r.status}`); }),
 };
 
 export function formatUptime(seconds: number): string {
