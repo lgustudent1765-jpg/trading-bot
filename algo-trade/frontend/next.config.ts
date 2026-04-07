@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   typescript: {
     // Auto-generated .next/types files have a conflict with TypeScript 5.9+
     ignoreBuildErrors: true,
