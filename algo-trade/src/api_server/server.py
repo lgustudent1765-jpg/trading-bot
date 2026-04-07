@@ -73,15 +73,16 @@ def create_app(
         if recent_signals:
             sig_rows = ""
             for s in reversed(recent_signals):
-                side_color = "#00ff00" if str(s.get("side", "")).upper() == "BUY" else "#ff4444"
+                _direction = str(s.get("direction", s.get("side", ""))).upper()
+                side_color = "#00ff00" if _direction in ("BUY", "CALL") else "#ff4444"
                 sig_rows += (
                     f"<tr>"
-                    f"<td>{s.get('timestamp', s.get('time', '—'))}</td>"
+                    f"<td>{s.get('ts', s.get('timestamp', s.get('time', '—')))}</td>"
                     f"<td><b>{s.get('symbol', '—')}</b></td>"
-                    f"<td style='color:{side_color}'>{s.get('side', s.get('action', '—')).upper()}</td>"
-                    f"<td>{s.get('price', s.get('entry_price', '—'))}</td>"
-                    f"<td>{s.get('quantity', s.get('qty', '—'))}</td>"
-                    f"<td style='color:#aaa'>{s.get('strategy', s.get('reason', '—'))}</td>"
+                    f"<td style='color:{side_color}'>{s.get('direction', s.get('side', s.get('action', '—'))).upper()}</td>"
+                    f"<td>{s.get('entry', s.get('price', s.get('entry_price', '—')))}</td>"
+                    f"<td>{s.get('size', s.get('quantity', s.get('qty', '—')))}</td>"
+                    f"<td style='color:#aaa'>{s.get('rationale', s.get('strategy', s.get('reason', '—')))}</td>"
                     f"</tr>"
                 )
             signals_html = f"""
@@ -107,7 +108,7 @@ def create_app(
                     f"<td><b>{sym}</b></td>"
                     f"<td>{pos.get('quantity', pos.get('qty', '—'))}</td>"
                     f"<td>{pos.get('entry_price', pos.get('avg_price', '—'))}</td>"
-                    f"<td>{pos.get('current_price', '—')}</td>"
+                    f"<td>{pos.get('current_price', pos.get('underlying_price', '—'))}</td>"
                     f"<td style='color:{pnl_color}'>{pnl}</td>"
                     f"</tr>"
                 )
