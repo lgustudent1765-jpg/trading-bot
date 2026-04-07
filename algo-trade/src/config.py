@@ -33,6 +33,14 @@ def _load_dotenv(path: Path) -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
+            val = val.strip()
+            # Strip inline comments (e.g. VALUE=foo  # comment → foo)
+            # Only strip when the # is preceded by whitespace to avoid
+            # breaking values that contain # (e.g. URLs with fragments).
+            if not (val.startswith('"') or val.startswith("'")):
+                hash_pos = val.find(" #")
+                if hash_pos != -1:
+                    val = val[:hash_pos]
             val = val.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = val
