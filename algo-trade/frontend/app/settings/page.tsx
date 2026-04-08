@@ -147,16 +147,31 @@ type SavingState = Record<SectionKey, boolean>;
 type SavedState  = Record<SectionKey, boolean>;
 
 export default function SettingsPage() {
-  const [cfg, setCfg]       = useState<ConfigPayload>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError]   = useState("");
+  const [cfg, setCfg]             = useState<ConfigPayload>({});
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [maskedFields, setMaskedFields] = useState<Set<keyof ConfigPayload>>(new Set());
   const [saving, setSaving] = useState<SavingState>({ broker: false, market: false, risk: false, notify: false });
   const [saved,  setSaved]  = useState<SavedState>({ broker: false, market: false, risk: false, notify: false });
 
   const load = useCallback(async () => {
     try {
       const data = await api.getConfig();
-      setCfg(data);
+      // H-1: strip masked sentinels so credential inputs start empty
+      const CREDENTIAL_KEYS: (keyof ConfigPayload)[] = [
+        "webull_device_id", "webull_access_token", "webull_refresh_token", "webull_trade_token",
+      ];
+      const masked = new Set<keyof ConfigPayload>();
+      const cleaned = { ...data };
+      for (const k of CREDENTIAL_KEYS) {
+        if (cleaned[k] === "********") {
+          masked.add(k);
+          cleaned[k] = undefined;
+        }
+      }
+      setMaskedFields(masked);
+      setCfg(cleaned);
       setError("");
     } catch {
       setError("Cannot reach backend.");
@@ -174,12 +189,14 @@ export default function SettingsPage() {
   async function save(section: SectionKey, payload: ConfigPayload) {
     setSaving((s) => ({ ...s, [section]: true }));
     setSaved((s)  => ({ ...s, [section]: false }));
+    setSaveError("");
     try {
       await api.updateConfig(payload);
       setSaved((s) => ({ ...s, [section]: true }));
       setTimeout(() => setSaved((s) => ({ ...s, [section]: false })), 2500);
+      load(); // H-3/L-1: re-sync fmp_api_key_set and all state from backend
     } catch {
-      alert("Save failed — check that the backend is running.");
+      setSaveError("Save failed — check that the backend is running.");
     } finally {
       setSaving((s) => ({ ...s, [section]: false }));
     }
@@ -203,6 +220,12 @@ export default function SettingsPage() {
 
   return (
     <div className="p-5 md:p-6 space-y-5 max-w-2xl">
+      {/* M-2: inline save error */}
+      {saveError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 text-sm px-4 py-3">
+          {saveError}
+        </div>
+      )}
 
       {/* ── Broker ── */}
       <Card>
@@ -245,11 +268,11 @@ export default function SettingsPage() {
             <div className="space-y-3 pt-1 border-t border-zinc-800">
               <p className="text-xs font-medium text-zinc-500 pt-1 uppercase tracking-wider">Webull Credentials</p>
               <div className="grid grid-cols-2 gap-3">
-                <Input label="Device ID"     type="password" placeholder="••••••••" value={cfg.webull_device_id    ?? ""} onChange={(e) => set("webull_device_id",    e.target.value)} />
-                <Input label="Account ID"    type="text"     placeholder=""          value={cfg.webull_account_id   ?? ""} onChange={(e) => set("webull_account_id",   e.target.value)} />
-                <Input label="Access Token"  type="password" placeholder="••••••••" value={cfg.webull_access_token  ?? ""} onChange={(e) => set("webull_access_token",  e.target.value)} />
-                <Input label="Refresh Token" type="password" placeholder="••••••••" value={cfg.webull_refresh_token ?? ""} onChange={(e) => set("webull_refresh_token", e.target.value)} />
-                <Input label="Trade Token"   type="password" placeholder="••••••••" value={cfg.webull_trade_token   ?? ""} onChange={(e) => set("webull_trade_token",   e.target.value)} />
+                <Input label="Device ID"     type="password" placeholder={maskedFields.has("webull_device_id")     ? "••••••••  (already set)" : "Enter value…"} value={cfg.webull_device_id    ?? ""} onChange={(e) => set("webull_device_id",    e.target.value)} />
+                <Input label="Account ID"    type="text"     placeholder={cfg.webull_account_id_set                ? "already set"              : "Enter account ID…"}  value={cfg.webull_account_id   ?? ""} onChange={(e) => set("webull_account_id",   e.target.value)} />
+                <Input label="Access Token"  type="password" placeholder={maskedFields.has("webull_access_token")  ? "••••••••  (already set)" : "Enter value…"} value={cfg.webull_access_token  ?? ""} onChange={(e) => set("webull_access_token",  e.target.value)} />
+                <Input label="Refresh Token" type="password" placeholder={maskedFields.has("webull_refresh_token") ? "••••••••  (already set)" : "Enter value…"} value={cfg.webull_refresh_token ?? ""} onChange={(e) => set("webull_refresh_token", e.target.value)} />
+                <Input label="Trade Token"   type="password" placeholder={maskedFields.has("webull_trade_token")   ? "••••••••  (already set)" : "Enter value…"} value={cfg.webull_trade_token   ?? ""} onChange={(e) => set("webull_trade_token",   e.target.value)} />
               </div>
             </div>
           )}
@@ -289,12 +312,14 @@ export default function SettingsPage() {
             <Input
               label="Poll Interval (seconds)"
               type="number"
+              min={1}
               value={cfg.screener_poll_interval_seconds ?? 60}
               onChange={(e) => set("screener_poll_interval_seconds", Number(e.target.value))}
             />
             <Input
               label="Top N Stocks to Screen"
               type="number"
+              min={1}
               value={cfg.screener_top_n ?? 10}
               onChange={(e) => set("screener_top_n", Number(e.target.value))}
             />
@@ -339,6 +364,7 @@ export default function SettingsPage() {
             <Input
               label="Max Position Size (% of equity)"
               type="number"
+              min={0.1}
               step="0.01"
               suffix="%"
               value={((cfg.risk_max_position_pct ?? 0.05) * 100).toFixed(1)}
@@ -347,12 +373,14 @@ export default function SettingsPage() {
             <Input
               label="Max Open Positions"
               type="number"
+              min={1}
               value={cfg.risk_max_open_positions ?? 5}
               onChange={(e) => set("risk_max_open_positions", Number(e.target.value))}
             />
             <Input
               label="PDT Equity Threshold ($)"
               type="number"
+              min={0}
               prefix="$"
               value={cfg.risk_pdt_equity_threshold ?? 25000}
               onChange={(e) => set("risk_pdt_equity_threshold", Number(e.target.value))}
@@ -360,6 +388,7 @@ export default function SettingsPage() {
             <Input
               label="Stop Loss (ATR multiplier)"
               type="number"
+              min={0.1}
               step="0.1"
               suffix="× ATR"
               value={cfg.risk_stop_loss_atr_mult ?? 1.5}
@@ -368,6 +397,7 @@ export default function SettingsPage() {
             <Input
               label="Take Profit (ATR multiplier)"
               type="number"
+              min={0.1}
               step="0.1"
               suffix="× ATR"
               value={cfg.risk_take_profit_atr_mult ?? 3.0}

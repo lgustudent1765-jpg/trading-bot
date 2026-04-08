@@ -12,8 +12,10 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -25,6 +27,30 @@ log = get_logger(__name__)
 
 _START_TIME = time.time()
 _MAX_SIGNALS = 100
+
+# C-1: optional API key protecting POST /config (set CONFIG_API_KEY env var to enable)
+_CONFIG_API_KEY = os.getenv("CONFIG_API_KEY", "")
+_MASK_SENTINEL = "********"
+
+# C-2: validation allowlists / ranges
+_ENUM_FIELDS: Dict[str, set] = {
+    "mode":              {"paper", "manual", "automated"},
+    "broker_name":       {"mock", "webull"},
+    "screener_provider": {"yahoo", "fmp", "mock"},
+}
+_POSITIVE_INT_FIELDS = {
+    "screener_poll_interval_seconds",
+    "screener_top_n",
+    "risk_max_open_positions",
+    "risk_pdt_equity_threshold",
+}
+_POSITIVE_FLOAT_FIELDS = {
+    "risk_max_position_pct",
+    "risk_stop_loss_atr_mult",
+    "risk_take_profit_atr_mult",
+}
+# H-2: permitted webhook domains
+_ALLOWED_WEBHOOK_HOSTS = {"discord.com", "discordapp.com", "hooks.slack.com"}
 
 
 def create_app(
@@ -200,14 +226,63 @@ def create_app(
             "notify_webhook_enabled": webhook.get("enabled", False),
             "notify_webhook_url": webhook.get("url", ""),
             "webull_device_id": _mask(wb.get("device_id", "")),
-            "webull_account_id": wb.get("account_id", ""),
+            "webull_account_id_set": bool(wb.get("account_id", "")),
         })
 
     async def post_config_endpoint(request: web.Request) -> web.Response:
+        # C-1: API key auth (enforced only when CONFIG_API_KEY env var is set)
+        if _CONFIG_API_KEY:
+            if request.headers.get("X-Api-Key", "") != _CONFIG_API_KEY:
+                return web.json_response({"error": "unauthorized"}, status=401)
+
         try:
             body = await request.json()
         except Exception:
             return web.json_response({"error": "invalid JSON"}, status=400)
+
+        # C-2: enum allowlist validation
+        for field, allowed in _ENUM_FIELDS.items():
+            if field in body and body[field] not in allowed:
+                return web.json_response(
+                    {"error": f"{field} must be one of {sorted(allowed)}"}, status=422
+                )
+
+        # C-2: positive integer validation
+        for field in _POSITIVE_INT_FIELDS:
+            if field in body:
+                try:
+                    v = int(body[field])
+                except (TypeError, ValueError):
+                    return web.json_response({"error": f"{field} must be a positive integer"}, status=422)
+                if v < 1:
+                    return web.json_response({"error": f"{field} must be >= 1"}, status=422)
+
+        # C-2: positive float validation
+        for field in _POSITIVE_FLOAT_FIELDS:
+            if field in body:
+                try:
+                    v = float(body[field])
+                except (TypeError, ValueError):
+                    return web.json_response({"error": f"{field} must be a positive number"}, status=422)
+                if v <= 0:
+                    return web.json_response({"error": f"{field} must be > 0"}, status=422)
+
+        # H-2: webhook URL must be https:// from an allowed domain
+        if "notify_webhook_url" in body:
+            url = body["notify_webhook_url"]
+            if url and url != _MASK_SENTINEL:
+                try:
+                    parsed = urlparse(url)
+                    host = parsed.netloc.lower().split(":")[0]
+                    if parsed.scheme != "https" or not any(
+                        host == d or host.endswith("." + d) for d in _ALLOWED_WEBHOOK_HOSTS
+                    ):
+                        return web.json_response(
+                            {"error": "notify_webhook_url must be https:// from discord.com, discordapp.com, or hooks.slack.com"},
+                            status=422,
+                        )
+                except Exception:
+                    return web.json_response({"error": "notify_webhook_url is invalid"}, status=422)
 
         # Build a nested updates dict from the flat payload
         updates: Dict[str, Any] = {}
@@ -246,7 +321,11 @@ def create_app(
 
         for flat_key, path in mapping.items():
             if flat_key in body:
-                _set(path, body[flat_key])
+                val = body[flat_key]
+                # H-1: skip empty strings and mask sentinels — never overwrite with blank/masked
+                if isinstance(val, str) and (val == "" or val == _MASK_SENTINEL):
+                    continue
+                _set(path, val)
 
         if not updates:
             return web.json_response({"error": "no recognised fields"}, status=400)

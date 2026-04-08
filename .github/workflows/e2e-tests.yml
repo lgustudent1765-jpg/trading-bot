@@ -1,0 +1,266 @@
+##############################################################################
+# e2e-tests.yml
+#
+# Runs the full E2E + unit test suite on every push to the `test` branch.
+#
+# On SUCCESS  → fast-forward merges `test` into `main` and pushes.
+# On FAILURE  → fails the workflow, prints a clear summary, does NOT merge.
+#
+# Pipeline:
+#   setup → test → (pass) merge-to-main
+#                → (fail) report-failure
+##############################################################################
+
+name: E2E Test Suite & Auto-Merge
+
+on:
+  push:
+    branches:
+      - test
+
+permissions:
+  contents: write   # required for the auto-merge push
+
+env:
+  PYTHON_VERSION: "3.11"
+  WORKING_DIR: algo-trade
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 1: Run the full test suite
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run E2E Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for the merge step
+
+      # ── Python setup ────────────────────────────────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ── Dependency caching ──────────────────────────────────────────────
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('algo-trade/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
+            ${{ runner.os }}-pip-
+
+      # ── Install dependencies ─────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Verify installation ──────────────────────────────────────────────
+      - name: Verify test framework installation
+        run: |
+          python -m pytest --version
+          python -c "import aiohttp; print('aiohttp', aiohttp.__version__)"
+          python -c "import numpy; print('numpy', numpy.__version__)"
+
+      # ── Set up test environment ──────────────────────────────────────────
+      - name: Configure test environment
+        run: |
+          cp .env.test.example .env.test || true
+          # Export test env vars
+          echo "MODE=paper"                               >> $GITHUB_ENV
+          echo "ALGO_SCREENER_PROVIDER=mock"              >> $GITHUB_ENV
+          echo "ALGO_SCREENER_MARKET_HOURS_ONLY=false"    >> $GITHUB_ENV
+          echo "BROKER=mock"                              >> $GITHUB_ENV
+          echo "LOG_LEVEL=WARNING"                        >> $GITHUB_ENV
+          echo "NOTIFY_EMAIL_ENABLED=false"               >> $GITHUB_ENV
+          echo "NOTIFY_WEBHOOK_ENABLED=false"             >> $GITHUB_ENV
+          echo "FMP_API_KEY=ci-test-placeholder"          >> $GITHUB_ENV
+
+      # ── Run existing unit tests ──────────────────────────────────────────
+      - name: Run unit tests (existing test suite)
+        id: unit_tests
+        run: |
+          mkdir -p test-results
+          python -m pytest tests/ \
+            --ignore=tests/e2e \
+            --tb=short \
+            --junitxml=test-results/unit-results.xml \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:test-results/coverage.xml \
+            -W ignore::DeprecationWarning \
+            -v \
+            2>&1 | tee test-results/unit-output.log
+        continue-on-error: true
+
+      # ── Run E2E tests ────────────────────────────────────────────────────
+      - name: Run E2E test suite
+        id: e2e_tests
+        run: |
+          python -m pytest tests/e2e/ \
+            --tb=short \
+            --junitxml=test-results/e2e-results.xml \
+            -W ignore::DeprecationWarning \
+            -v \
+            2>&1 | tee test-results/e2e-output.log
+        continue-on-error: true
+
+      # ── Generate job summary ─────────────────────────────────────────────
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse unit test results
+          if [ -f test-results/unit-results.xml ]; then
+            UNIT_TESTS=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          try:
+              tree = ET.parse('test-results/unit-results.xml')
+              root = tree.getroot()
+              suite = root if root.tag == 'testsuite' else root.find('testsuite')
+              tests = int(suite.get('tests', 0))
+              failures = int(suite.get('failures', 0))
+              errors = int(suite.get('errors', 0))
+              skipped = int(suite.get('skipped', 0))
+              passed = tests - failures - errors - skipped
+              print(f'| Unit Tests | {tests} | {passed} | {failures + errors} | {skipped} |')
+          except Exception as e:
+              print(f'| Unit Tests | ? | ? | ? | ? |')
+          ")
+          else
+            UNIT_TESTS="| Unit Tests | ? | ? | ? | ? |"
+          fi
+
+          # Parse E2E test results
+          if [ -f test-results/e2e-results.xml ]; then
+            E2E_TESTS=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          try:
+              tree = ET.parse('test-results/e2e-results.xml')
+              root = tree.getroot()
+              suite = root if root.tag == 'testsuite' else root.find('testsuite')
+              tests = int(suite.get('tests', 0))
+              failures = int(suite.get('failures', 0))
+              errors = int(suite.get('errors', 0))
+              skipped = int(suite.get('skipped', 0))
+              passed = tests - failures - errors - skipped
+              print(f'| E2E Tests | {tests} | {passed} | {failures + errors} | {skipped} |')
+          except Exception as e:
+              print(f'| E2E Tests | ? | ? | ? | ? |')
+          ")
+          else
+            E2E_TESTS="| E2E Tests | ? | ? | ? | ? |"
+          fi
+
+          echo "| Suite | Total | Passed | Failed | Skipped |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|--------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "$UNIT_TESTS" >> $GITHUB_STEP_SUMMARY
+          echo "$E2E_TESTS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          UNIT_STATUS="${{ steps.unit_tests.outcome }}"
+          E2E_STATUS="${{ steps.e2e_tests.outcome }}"
+
+          if [ "$UNIT_STATUS" = "success" ] && [ "$E2E_STATUS" = "success" ]; then
+            echo "### ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Tests failed" >> $GITHUB_STEP_SUMMARY
+            [ "$UNIT_STATUS" != "success" ] && echo "- Unit tests: **FAILED**" >> $GITHUB_STEP_SUMMARY
+            [ "$E2E_STATUS" != "success" ]  && echo "- E2E tests: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── Upload test artifacts ────────────────────────────────────────────
+      - name: Upload test results and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: |
+            algo-trade/test-results/
+          retention-days: 14
+
+      # ── Fail step if any tests failed ───────────────────────────────────
+      - name: Assert all tests passed
+        run: |
+          UNIT="${{ steps.unit_tests.outcome }}"
+          E2E="${{ steps.e2e_tests.outcome }}"
+          if [ "$UNIT" != "success" ] || [ "$E2E" != "success" ]; then
+            echo "::error::Test suite failed. Unit: $UNIT | E2E: $E2E"
+            echo "See uploaded artifacts for full logs."
+            exit 1
+          fi
+          echo "All tests passed."
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 2: Merge test → main (only runs if all tests passed)
+  # ──────────────────────────────────────────────────────────────────────────
+  merge-to-main:
+    name: Merge test into main
+    needs: test
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fast-forward merge test → main
+        run: |
+          git checkout main
+          git merge --ff-only origin/test \
+            || git merge --no-ff origin/test \
+                  -m "chore: auto-merge test → main after passing E2E suite [skip ci]"
+          git push origin main
+
+      - name: Post merge summary
+        run: |
+          echo "## Auto-Merge Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch \`test\` has been merged into \`main\`." >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 3: Failure report (only runs when tests fail)
+  # ──────────────────────────────────────────────────────────────────────────
+  report-failure:
+    name: Report test failure
+    needs: test
+    if: failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Output failure summary
+        run: |
+          echo "## ❌ E2E Test Suite Failed — Merge Blocked" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The \`test\` branch was **NOT** merged into \`main\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the \`test-results\` artifact from the failed job." >> $GITHUB_STEP_SUMMARY
+          echo "2. Review \`unit-output.log\` and \`e2e-output.log\` for failure details." >> $GITHUB_STEP_SUMMARY
+          echo "3. Fix the failing tests on the \`test\` branch." >> $GITHUB_STEP_SUMMARY
+          echo "4. Push again to re-trigger this workflow." >> $GITHUB_STEP_SUMMARY
+          exit 1

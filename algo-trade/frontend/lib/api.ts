@@ -74,6 +74,7 @@ export interface ConfigPayload {
   webull_refresh_token?: string;
   webull_trade_token?: string;
   webull_account_id?: string;
+  webull_account_id_set?: boolean;
 }
 
 async function fetchJSON<T>(path: string): Promise<T> {
