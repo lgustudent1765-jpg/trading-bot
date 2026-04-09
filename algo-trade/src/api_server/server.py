@@ -57,6 +57,7 @@ def create_app(
     risk_manager: Any,
     signal_store: List[Dict],
     position_store: Optional[Any] = None,
+    market_adapter: Optional[Any] = None,
 ) -> web.Application:
 
     async def health(request: web.Request) -> web.Response:
@@ -344,14 +345,147 @@ def create_app(
         update_config(updates)
         return web.json_response({"ok": True})
 
+    # ── Market data endpoints ──────────────────────────────────────────────
+
+    async def get_overview(request: web.Request) -> web.Response:
+        """Top gainers/losers from live market data."""
+        if not market_adapter:
+            return web.json_response({"error": "market adapter unavailable"}, status=503)
+        try:
+            gainers = await market_adapter.get_top_gainers(limit=5)
+            losers  = await market_adapter.get_top_losers(limit=5)
+            return web.json_response({
+                "gainers": [
+                    {"symbol": q.symbol, "price": q.price,
+                     "change_pct": round(q.change_pct, 2), "volume": q.volume}
+                    for q in gainers
+                ],
+                "losers": [
+                    {"symbol": q.symbol, "price": q.price,
+                     "change_pct": round(q.change_pct, 2), "volume": q.volume}
+                    for q in losers
+                ],
+                "refreshed_at": now_et().isoformat(),
+            })
+        except Exception as exc:
+            log.error("overview endpoint failed", error=str(exc))
+            return web.json_response({"error": "failed to fetch market data"}, status=503)
+
+    async def get_quote(request: web.Request) -> web.Response:
+        """Price bars for a symbol. Query params: range (default 1d), interval (default 1m)."""
+        symbol    = request.match_info.get("symbol", "").upper()
+        if not symbol:
+            return web.json_response({"error": "symbol required"}, status=400)
+        range_str = request.rel_url.query.get("range", "1d")
+        interval  = request.rel_url.query.get("interval", "1m")
+        if not market_adapter:
+            return web.json_response({"error": "market adapter unavailable"}, status=503)
+        try:
+            bars  = await market_adapter.get_historical_bars(symbol, range_str, interval)
+            quote = await market_adapter.get_quote(symbol)
+            return web.json_response({
+                "symbol":        symbol,
+                "current_price": quote.price,
+                "change_pct":    round(quote.change_pct, 2),
+                "bars": bars,
+            })
+        except Exception as exc:
+            log.error("quote endpoint failed", symbol=symbol, error=str(exc))
+            return web.json_response({"error": "failed to fetch quote"}, status=503)
+
+    async def get_strategies(request: web.Request) -> web.Response:
+        """Strategy performance derived from live signal_store."""
+        total  = len(signal_store)
+        calls  = sum(1 for s in signal_store if s.get("direction") == "CALL")
+        puts   = total - calls
+        seen: dict = {}
+        for s in signal_store:
+            sym = s.get("symbol")
+            if sym:
+                seen[sym] = True
+        return web.json_response({
+            "strategy":       "RSI + MACD",
+            "description":    "RSI(14) mean-reversion entries confirmed by MACD histogram, with ATR-based stops.",
+            "is_active":      True,
+            "total_signals":  total,
+            "call_signals":   calls,
+            "put_signals":    puts,
+            "symbols_traded": list(seen.keys())[-20:],
+        })
+
+    async def run_backtest_endpoint(request: web.Request) -> web.Response:
+        """Run a real backtest using Yahoo Finance historical data."""
+        if not market_adapter:
+            return web.json_response({"error": "market adapter unavailable"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        symbol = str(body.get("symbol", "SPY")).upper()
+        period = str(body.get("period", "1 Year"))
+
+        _range_map = {
+            "3 Months": ("3mo", "1d"),
+            "6 Months": ("6mo", "1d"),
+            "1 Year":   ("1y",  "1d"),
+            "2 Years":  ("2y",  "1wk"),
+            "5 Years":  ("5y",  "1wk"),
+        }
+        range_str, interval = _range_map.get(period, ("1y", "1d"))
+
+        try:
+            import asyncio as _aio
+            bars = await market_adapter.get_historical_bars(symbol, range_str, interval)
+            if not bars or len(bars) < 30:
+                return web.json_response(
+                    {"error": f"Insufficient historical data for {symbol} ({len(bars)} bars)"},
+                    status=422,
+                )
+
+            from src.backtester import Backtester
+            from src.config import get_config
+            cfg = get_config()
+            bt  = Backtester(cfg)
+            result = await _aio.get_event_loop().run_in_executor(None, bt.run_from_bars, bars)
+            summary = result.summary()
+
+            # Build equity curve from trade sequence
+            equity = 10_000.0
+            equity_curve = [{"date": bars[0]["datetime"][:10], "equity": round(equity)}]
+            for trade in result.trades:
+                if trade.pnl_pct is not None:
+                    equity *= (1 + trade.pnl_pct / 100)
+                    idx = min(trade.exit_bar or 0, len(bars) - 1)
+                    equity_curve.append({
+                        "date":   bars[idx]["datetime"][:10],
+                        "equity": round(equity),
+                    })
+
+            return web.json_response({
+                **summary,
+                "equity_curve": equity_curve,
+                "symbol": symbol,
+                "period": period,
+            })
+        except Exception as exc:
+            log.error("backtest endpoint failed", symbol=symbol, error=str(exc))
+            return web.json_response({"error": f"Backtest failed: {exc}"}, status=500)
+
+    # ── Router ──────────────────────────────────────────────────────────────
+
     app = web.Application()
-    app.router.add_get("/health",    health)
-    app.router.add_get("/signals",   get_signals)
-    app.router.add_get("/positions", get_positions)
-    app.router.add_get("/metrics",   get_metrics)
-    app.router.add_get("/config",    get_config_endpoint)
-    app.router.add_post("/config",   post_config_endpoint)
-    app.router.add_get("/",          dashboard)
+    app.router.add_get("/health",           health)
+    app.router.add_get("/signals",          get_signals)
+    app.router.add_get("/positions",        get_positions)
+    app.router.add_get("/metrics",          get_metrics)
+    app.router.add_get("/overview",         get_overview)
+    app.router.add_get("/quote/{symbol}",   get_quote)
+    app.router.add_get("/strategies",       get_strategies)
+    app.router.add_post("/backtest/run",    run_backtest_endpoint)
+    app.router.add_get("/config",           get_config_endpoint)
+    app.router.add_post("/config",          post_config_endpoint)
+    app.router.add_get("/",                 dashboard)
     return app
 
 

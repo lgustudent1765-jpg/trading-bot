@@ -140,24 +140,8 @@ class Backtester:
             self._atr_period + 1,
         )
 
-    def run(self, csv_path: str) -> BacktestResult:
-        """
-        Run the backtest on a CSV file.
-
-        Parameters
-        ----------
-        csv_path : path to CSV with columns: datetime, open, high, low, close, volume.
-
-        Returns
-        -------
-        BacktestResult
-        """
-        bars = _load_csv(Path(csv_path))
-        if len(bars) < self._warmup + 1:
-            raise ValueError(
-                f"CSV has only {len(bars)} bars; need at least {self._warmup + 1}"
-            )
-
+    def _run_bars(self, bars: List[Dict[str, Any]]) -> BacktestResult:
+        """Core backtest loop operating on an in-memory bar list."""
         result = BacktestResult()
         open_trade: Optional[Trade] = None
 
@@ -245,3 +229,20 @@ class Backtester:
             result.trades.append(open_trade)
 
         return result
+
+    def run(self, csv_path: str) -> BacktestResult:
+        """Run the backtest on a CSV file (datetime, open, high, low, close, volume)."""
+        bars = _load_csv(Path(csv_path))
+        if len(bars) < self._warmup + 1:
+            raise ValueError(
+                f"CSV has only {len(bars)} bars; need at least {self._warmup + 1}"
+            )
+        return self._run_bars(bars)
+
+    def run_from_bars(self, bars: List[Dict[str, Any]]) -> BacktestResult:
+        """Run the backtest on an in-memory list of bar dicts (same schema as CSV rows)."""
+        if len(bars) < self._warmup + 1:
+            raise ValueError(
+                f"Need at least {self._warmup + 1} bars; got {len(bars)}"
+            )
+        return self._run_bars(bars)

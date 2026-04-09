@@ -1,63 +1,17 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { FlaskConical, Play, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { FlaskConical, Play, TrendingUp, TrendingDown, Minus, AlertCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import { api, type BacktestResponse } from "@/lib/api";
 
-const STRATEGIES = ["RSI Reversion", "Momentum Breakout", "Vol Squeeze", "Trend Following"];
-const SYMBOLS    = ["AAPL", "TSLA", "SPY", "QQQ", "NVDA", "META", "MSFT"];
-const PERIODS    = ["3 Months", "6 Months", "1 Year", "2 Years", "5 Years"];
-
-function generateEquityCurve(totalReturn: number, points = 120) {
-  const data: { date: string; equity: number }[] = [];
-  let equity = 10000;
-  const now = new Date();
-  for (let i = 0; i < points; i++) {
-    const change = (Math.random() - 0.46) * 80 + (totalReturn / points) * 100;
-    equity = Math.max(equity + change, 5000);
-    const d = new Date(now);
-    d.setDate(d.getDate() - (points - i));
-    data.push({ date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }), equity: Math.round(equity) });
-  }
-  return data;
-}
-
-interface BacktestResult {
-  totalReturn: number;
-  annualReturn: number;
-  maxDrawdown: number;
-  sharpe: number;
-  winRate: number;
-  totalTrades: number;
-  profitFactor: number;
-  equityCurve: { date: string; equity: number }[];
-}
-
-function runBacktest(strategy: string, symbol: string): BacktestResult {
-  const seed = (strategy.length + symbol.length) % 7;
-  const totalReturn   = 12 + seed * 4.2;
-  const annualReturn  = totalReturn * 0.6;
-  const maxDrawdown   = -(6 + seed * 1.8);
-  const sharpe        = 1.1 + seed * 0.18;
-  const winRate       = 54 + seed * 2.1;
-  const totalTrades   = 80 + seed * 12;
-  const profitFactor  = 1.3 + seed * 0.12;
-  return {
-    totalReturn,
-    annualReturn,
-    maxDrawdown,
-    sharpe,
-    winRate,
-    totalTrades,
-    profitFactor,
-    equityCurve: generateEquityCurve(totalReturn),
-  };
-}
+const SYMBOLS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "META", "MSFT", "AMZN", "AMD", "GOOGL"];
+const PERIODS = ["3 Months", "6 Months", "1 Year", "2 Years", "5 Years"];
 
 const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { value: number }[] }) => {
   if (active && payload?.length) {
@@ -71,22 +25,33 @@ const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { valu
 };
 
 export default function BacktestPage() {
-  const [strategy, setStrategy] = useState(STRATEGIES[0]);
-  const [symbol,   setSymbol]   = useState(SYMBOLS[0]);
-  const [period,   setPeriod]   = useState(PERIODS[2]);
-  const [result,   setResult]   = useState<BacktestResult | null>(null);
-  const [loading,  setLoading]  = useState(false);
+  const [symbol,  setSymbol]  = useState(SYMBOLS[0]);
+  const [period,  setPeriod]  = useState(PERIODS[2]);
+  const [result,  setResult]  = useState<BacktestResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   async function handleRun() {
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 1400));
-    setResult(runBacktest(strategy, symbol));
-    setLoading(false);
+    setApiError(null);
+    setResult(null);
+    try {
+      const res = await api.backtest({ symbol, period });
+      if (res.error) {
+        setApiError(res.error);
+      } else {
+        setResult(res);
+      }
+    } catch {
+      setApiError("Backend offline or backtest failed. Start the trading engine to use this feature.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const isUp = (result?.totalReturn ?? 0) >= 0;
-  const startEquity = result?.equityCurve[0]?.equity ?? 10000;
-  const endEquity   = result?.equityCurve[result.equityCurve.length - 1]?.equity ?? 10000;
+  const isUp         = (result?.total_pnl_pct ?? 0) >= 0;
+  const startEquity  = result?.equity_curve[0]?.equity ?? 10000;
+  const endEquity    = result?.equity_curve[result.equity_curve.length - 1]?.equity ?? 10000;
 
   return (
     <div className="p-5 md:p-6 space-y-4 max-w-[1440px]">
@@ -99,77 +64,101 @@ export default function BacktestPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-            <SelectGroup label="Strategy" value={strategy} options={STRATEGIES} onChange={setStrategy} />
-            <SelectGroup label="Symbol"   value={symbol}   options={SYMBOLS}    onChange={setSymbol} />
-            <SelectGroup label="Period"   value={period}   options={PERIODS}    onChange={setPeriod} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <SelectGroup label="Symbol" value={symbol} options={SYMBOLS} onChange={setSymbol} />
+            <SelectGroup label="Period" value={period} options={PERIODS} onChange={setPeriod} />
           </div>
-          <Button variant="primary" onClick={handleRun} loading={loading} className="w-full sm:w-auto">
-            <Play className="w-3.5 h-3.5 mr-1.5" aria-hidden />
-            {loading ? "Running…" : "Run Backtest"}
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button variant="primary" onClick={handleRun} loading={loading} className="w-full sm:w-auto">
+              <Play className="w-3.5 h-3.5 mr-1.5" aria-hidden />
+              {loading ? "Running…" : "Run Backtest"}
+            </Button>
+            <p className="text-xs text-zinc-500">
+              Uses the live RSI + MACD strategy against real Yahoo Finance historical data
+            </p>
+          </div>
         </CardContent>
       </Card>
+
+      {/* Error state */}
+      {apiError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 flex items-start gap-3">
+          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+          <p className="text-sm text-red-400">{apiError}</p>
+        </div>
+      )}
 
       {/* Results */}
       {result && (
         <>
           {/* KPI cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard label="Total Return"    value={formatPercent(result.totalReturn)}    positive={result.totalReturn >= 0} />
-            <KpiCard label="Annual Return"   value={formatPercent(result.annualReturn)}   positive={result.annualReturn >= 0} />
-            <KpiCard label="Max Drawdown"    value={formatPercent(result.maxDrawdown)}    positive={false} />
-            <KpiCard label="Sharpe Ratio"    value={result.sharpe.toFixed(2)}             positive={result.sharpe >= 1} />
+            <KpiCard label="Total P/L"    value={formatPercent(result.total_pnl_pct)} positive={result.total_pnl_pct >= 0} />
+            <KpiCard label="Avg P/L/Trade" value={formatPercent(result.avg_pnl_pct)} positive={result.avg_pnl_pct >= 0} />
+            <KpiCard label="Win Rate"     value={`${result.win_rate.toFixed(1)}%`}   positive={result.win_rate >= 50} />
+            <KpiCard label="Total Trades" value={String(result.trades)} />
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <KpiCard label="Win Rate"        value={`${result.winRate.toFixed(1)}%`}      positive={result.winRate >= 55} />
-            <KpiCard label="Total Trades"    value={result.totalTrades.toString()} />
-            <KpiCard label="Profit Factor"   value={result.profitFactor.toFixed(2)}       positive={result.profitFactor >= 1.3} />
+          <div className="grid grid-cols-2 gap-3">
+            <KpiCard label="Signals"  value={String(result.signals)} />
+            <KpiCard label="Winners"  value={String(result.winners ?? "—")} positive={(result.winners ?? 0) > 0} />
           </div>
 
           {/* Equity curve */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <CardTitle>Equity Curve — {strategy} on {symbol}</CardTitle>
-                <div className="text-right">
-                  <p className="text-xs text-zinc-500">Final equity</p>
-                  <p className="text-lg font-semibold tabular-nums text-zinc-100">{formatCurrency(endEquity)}</p>
-                  <p className={cn("text-xs font-medium tabular-nums", isUp ? "text-emerald-400" : "text-red-400")}>
-                    {isUp ? "+" : ""}{formatPercent((endEquity - startEquity) / startEquity * 100)}
-                  </p>
+          {result.equity_curve.length > 1 && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <CardTitle>Equity Curve — RSI + MACD on {result.symbol} ({result.period})</CardTitle>
+                  <div className="text-right">
+                    <p className="text-xs text-zinc-500">Final equity</p>
+                    <p className="text-lg font-semibold tabular-nums text-zinc-100">{formatCurrency(endEquity)}</p>
+                    <p className={cn("text-xs font-medium tabular-nums", isUp ? "text-emerald-400" : "text-red-400")}>
+                      {isUp ? "+" : ""}{formatPercent(((endEquity - startEquity) / startEquity) * 100)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-2 pb-4 px-2">
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={result.equityCurve} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                  <defs>
-                    <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%"   stopColor={isUp ? "#10b981" : "#ef4444"} stopOpacity={0.18} />
-                      <stop offset="100%" stopColor={isUp ? "#10b981" : "#ef4444"} stopOpacity={0}    />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} stroke="#27272a" strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fill: "#52525b", fontSize: 10 }} interval="preserveStartEnd" tickCount={6} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fill: "#52525b", fontSize: 10 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} domain={["auto", "auto"]} width={46} />
-                  <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#3f3f46", strokeWidth: 1 }} />
-                  <Area type="monotone" dataKey="equity" stroke={isUp ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#equityGrad)" dot={false} activeDot={{ r: 3, fill: isUp ? "#10b981" : "#ef4444", strokeWidth: 0 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent className="pt-2 pb-4 px-2">
+                <ResponsiveContainer width="100%" height={260}>
+                  <AreaChart data={result.equity_curve} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                    <defs>
+                      <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%"   stopColor={isUp ? "#10b981" : "#ef4444"} stopOpacity={0.18} />
+                        <stop offset="100%" stopColor={isUp ? "#10b981" : "#ef4444"} stopOpacity={0}    />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="#27272a" strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fill: "#52525b", fontSize: 10 }} interval="preserveStartEnd" tickCount={6} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fill: "#52525b", fontSize: 10 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} domain={["auto", "auto"]} width={46} />
+                    <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#3f3f46", strokeWidth: 1 }} />
+                    <Area type="monotone" dataKey="equity" stroke={isUp ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#equityGrad)" dot={false} activeDot={{ r: 3, fill: isUp ? "#10b981" : "#ef4444", strokeWidth: 0 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+
+          {result.equity_curve.length <= 1 && (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 gap-2 text-center">
+                <p className="text-sm text-zinc-400">No completed trades in this period</p>
+                <p className="text-xs text-zinc-600 max-w-xs">
+                  The RSI + MACD strategy requires specific market conditions to trigger. Try a longer period or different symbol.
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
       {/* Placeholder before first run */}
-      {!result && !loading && (
+      {!result && !loading && !apiError && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-20 gap-3 text-center">
             <FlaskConical className="w-8 h-8 text-zinc-700" />
             <p className="text-sm font-medium text-zinc-400">Configure and run a backtest above</p>
             <p className="text-xs text-zinc-600 max-w-xs">
-              Select a strategy, symbol, and time period, then click Run Backtest to see results.
+              Runs the live RSI + MACD strategy against real Yahoo Finance historical data. No mock data.
             </p>
           </CardContent>
         </Card>

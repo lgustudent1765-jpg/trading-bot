@@ -42,6 +42,21 @@ class MarketDataAdapter(abc.ABC):
         Each dict must contain keys: open, high, low, close, volume, datetime.
         """
 
+    async def get_historical_bars(
+        self,
+        symbol: str,
+        range_str: str = "1d",
+        interval: str = "1m",
+    ) -> List[Dict[str, Any]]:
+        """
+        Return historical OHLCV bars for the given range and interval.
+
+        Default falls back to intraday (1-day) bars; override for full range support.
+        range_str examples: "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"
+        interval examples: "1m", "5m", "1d", "1wk"
+        """
+        return await self.get_intraday_bars(symbol, "1min", 100)
+
     async def close(self) -> None:
         """Release any held resources (e.g., HTTP sessions)."""
 

@@ -107,7 +107,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             await signal_queue.put(sig)  # pass on to order manager
 
     api_cfg = config.get("api_server", {})
-    app = create_app(risk_manager, _signal_store, position_store)
+    app = create_app(risk_manager, _signal_store, position_store, market_adapter)
 
     log.info("pipeline starting", mode=mode)
 

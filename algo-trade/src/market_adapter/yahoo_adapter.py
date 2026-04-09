@@ -172,6 +172,59 @@ class YahooFinanceAdapter(MarketDataAdapter):
             log.error("Yahoo intraday bars failed", symbol=symbol, error=str(exc))
             return []
 
+    async def get_historical_bars(
+        self,
+        symbol: str,
+        range_str: str = "1d",
+        interval: str = "1m",
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch OHLCV bars for any range/interval combination supported by Yahoo Finance.
+
+        range_str: "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"
+        interval:  "1m", "2m", "5m", "15m", "30m", "60m", "1d", "1wk"
+        """
+        try:
+            data = await self._get(
+                f"{_BASE_CHART}/{symbol}",
+                {"interval": interval, "range": range_str, "includePrePost": "false"},
+            )
+            result_block = data.get("chart", {}).get("result", [])
+            if not result_block:
+                return []
+
+            block      = result_block[0]
+            timestamps = block.get("timestamp", [])
+            quote_data = block.get("indicators", {}).get("quote", [{}])[0]
+            opens   = quote_data.get("open",   [])
+            highs   = quote_data.get("high",   [])
+            lows    = quote_data.get("low",    [])
+            closes  = quote_data.get("close",  [])
+            volumes = quote_data.get("volume", [])
+
+            bars = []
+            for i, ts in enumerate(timestamps):
+                try:
+                    o = opens[i];  h = highs[i]
+                    l = lows[i];   c = closes[i]
+                    v = volumes[i]
+                    if None in (o, h, l, c):
+                        continue
+                    bars.append({
+                        "datetime": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                        "open":   float(o),
+                        "high":   float(h),
+                        "low":    float(l),
+                        "close":  float(c),
+                        "volume": int(v) if v is not None else 0,
+                    })
+                except (IndexError, TypeError):
+                    continue
+            return bars
+        except Exception as exc:
+            log.error("Yahoo historical bars failed", symbol=symbol, range=range_str, error=str(exc))
+            return []
+
     async def close(self) -> None:
         if self._session and not self._session.closed:
             await self._session.close()

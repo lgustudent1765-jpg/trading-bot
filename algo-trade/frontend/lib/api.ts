@@ -96,6 +96,15 @@ export const api = {
   metrics:      ()                        => fetchJSON<Metrics>("/metrics"),
   positions:    ()                        => fetchJSON<PositionsResponse>("/positions"),
   signals:      (limit = 100)             => fetchJSON<Signal[]>(`/signals?limit=${limit}`),
+  overview:     ()                        => fetchJSON<OverviewResponse>("/overview"),
+  quote:        (symbol: string, range = "1d", interval = "1m") =>
+                  fetchJSON<QuoteResponse>(`/quote/${symbol}?range=${range}&interval=${interval}`),
+  strategies:   ()                        => fetchJSON<StrategiesResponse>("/strategies"),
+  backtest:     (req: BacktestRequest)    => fetch(`${API_BASE}/backtest/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  }).then((r) => r.json() as Promise<BacktestResponse>),
   getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
   updateConfig: (payload: ConfigPayload)  => fetch(`${API_BASE}/config`, {
     method: "POST",
@@ -103,6 +112,63 @@ export const api = {
     body: JSON.stringify(payload),
   }).then((r) => { if (!r.ok) throw new Error(`config update failed: ${r.status}`); }),
 };
+
+export interface MarketMover {
+  symbol: string;
+  price: number;
+  change_pct: number;
+  volume: number;
+}
+
+export interface OverviewResponse {
+  gainers: MarketMover[];
+  losers: MarketMover[];
+  refreshed_at: string;
+}
+
+export interface PriceBar {
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface QuoteResponse {
+  symbol: string;
+  current_price: number;
+  change_pct: number;
+  bars: PriceBar[];
+}
+
+export interface StrategiesResponse {
+  strategy: string;
+  description: string;
+  is_active: boolean;
+  total_signals: number;
+  call_signals: number;
+  put_signals: number;
+  symbols_traded: string[];
+}
+
+export interface BacktestRequest {
+  symbol: string;
+  period: string;
+}
+
+export interface BacktestResponse {
+  signals: number;
+  trades: number;
+  winners?: number;
+  win_rate: number;
+  avg_pnl_pct: number;
+  total_pnl_pct: number;
+  equity_curve: { date: string; equity: number }[];
+  symbol: string;
+  period: string;
+  error?: string;
+}
 
 export function formatUptime(seconds: number): string {
   if (seconds < 60)   return `${Math.round(seconds)}s`;
