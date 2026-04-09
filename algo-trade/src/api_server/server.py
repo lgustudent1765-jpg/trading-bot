@@ -75,13 +75,24 @@ def create_app(
         return web.json_response(signal_store[-limit:])
 
     async def get_positions(request: web.Request) -> web.Response:
-        if position_store:
-            positions = position_store.get_positions()
-        else:
-            positions = {}
+        positions = position_store.get_positions() if position_store else {}
+        total_cost = 0.0
+        enriched: Dict[str, Any] = {}
+        for sym, pos in positions.items():
+            entry = float(pos.get("entry_price", 0) or 0)
+            qty   = int(pos.get("quantity", 0) or 0)
+            cost_basis = round(entry * qty * 100, 2)
+            total_cost += cost_basis
+            enriched[sym] = {
+                **pos,
+                "cost_basis": cost_basis,
+                "unrealized_pnl": None,
+                "unrealized_pnl_pct": None,
+            }
         return web.json_response({
-            "open_positions": positions,
-            "count": len(positions),
+            "open_positions": enriched,
+            "count": len(enriched),
+            "total_cost_basis": round(total_cost, 2),
         })
 
     async def get_metrics(request: web.Request) -> web.Response:

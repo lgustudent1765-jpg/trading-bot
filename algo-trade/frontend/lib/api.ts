@@ -29,11 +29,19 @@ export interface Position {
   quantity: number;
   underlying_price: number;
   opened_at: string;
+  /** Cost basis = entry_price × quantity × 100 (computed by server) */
+  cost_basis: number;
+  /** Unrealized P&L in dollars. null when live price is unavailable. */
+  unrealized_pnl: number | null;
+  /** Unrealized P&L as a percentage of cost_basis. null when unavailable. */
+  unrealized_pnl_pct: number | null;
 }
 
 export interface PositionsResponse {
   open_positions: Record<string, Position>;
   count: number;
+  /** Sum of all position cost bases */
+  total_cost_basis: number;
 }
 
 export interface Signal {

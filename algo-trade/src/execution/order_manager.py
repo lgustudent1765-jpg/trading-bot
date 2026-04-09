@@ -33,6 +33,7 @@ class OrderManager:
         config: Optional[Dict[str, Any]] = None,
         position_store=None,
         notifier=None,
+        signal_store: Optional[list] = None,
     ) -> None:
         self._broker = broker
         self._risk = risk_manager
@@ -41,6 +42,7 @@ class OrderManager:
         self._config = config or {}
         self._position_store = position_store
         self._notifier = notifier
+        self._signal_store = signal_store
         self._open_orders: Dict[str, SignalEvent] = {}
 
     async def _handle_signal(self, signal: SignalEvent) -> None:

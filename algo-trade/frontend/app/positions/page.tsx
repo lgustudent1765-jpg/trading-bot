@@ -36,7 +36,9 @@ export default function PositionsPage() {
 
   const rows = Object.values(positions);
 
-  const totalCost  = rows.reduce((s, p) => s + p.entry_price * p.quantity * 100, 0);
+  const totalCost  = rows.reduce((s, p) => s + (p.cost_basis ?? p.entry_price * p.quantity * 100), 0);
+  const totalPnl   = rows.reduce((s, p) => s + (p.unrealized_pnl ?? 0), 0);
+  const hasPnl     = rows.some((p) => p.unrealized_pnl !== null);
 
   return (
     <div className="p-5 md:p-6 space-y-4 max-w-[1440px]">
@@ -47,9 +49,14 @@ export default function PositionsPage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <SummaryCard label="Open Positions" value={String(count)} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <SummaryCard label="Open Positions"   value={String(count)} />
         <SummaryCard label="Total Cost Basis" value={formatCurrency(totalCost)} />
+        <SummaryCard
+          label="Unrealized P&L"
+          value={hasPnl ? formatCurrency(Math.abs(totalPnl)) : "—"}
+          positive={hasPnl ? totalPnl >= 0 : undefined}
+        />
         <SummaryCard
           label="Last Updated"
           value={lastUpdated ? lastUpdated.toLocaleTimeString() : "—"}
@@ -88,7 +95,7 @@ export default function PositionsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-zinc-800">
-                    {["Underlying", "Contract", "Direction", "Entry", "Stop", "Target", "Qty", "Cost Basis", "Opened"].map((h) => (
+                    {["Underlying", "Contract", "Direction", "Entry", "Stop", "Target", "Qty", "Cost Basis", "Unrealized P&L", "Opened"].map((h) => (
                       <th key={h} className="px-5 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -97,7 +104,9 @@ export default function PositionsPage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
                   {rows.map((p) => {
-                    const costBasis = p.entry_price * p.quantity * 100;
+                    const costBasis = p.cost_basis ?? p.entry_price * p.quantity * 100;
+                    const pnl       = p.unrealized_pnl;
+                    const pnlPct    = pnl !== null && costBasis > 0 ? (pnl / costBasis) * 100 : null;
                     const opened    = new Date(p.opened_at).toLocaleString();
                     return (
                       <tr key={p.option_symbol} className="hover:bg-zinc-800/30 transition-colors">
@@ -144,6 +153,18 @@ export default function PositionsPage() {
                         </td>
                         <td className="px-5 py-3.5 tabular-nums text-zinc-300">
                           {formatCurrency(costBasis)}
+                        </td>
+                        <td className="px-5 py-3.5 tabular-nums whitespace-nowrap">
+                          {pnl === null ? (
+                            <span className="text-zinc-600 text-xs">—</span>
+                          ) : (
+                            <div className={cn("flex flex-col", pnl >= 0 ? "text-emerald-400" : "text-red-400")}>
+                              <span className="font-medium">{pnl >= 0 ? "+" : ""}{formatCurrency(pnl)}</span>
+                              {pnlPct !== null && (
+                                <span className="text-xs opacity-70">{pnl >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%</span>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-5 py-3.5 text-xs text-zinc-500 whitespace-nowrap">
                           {opened}
