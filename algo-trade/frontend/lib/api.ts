@@ -10,6 +10,7 @@ export interface Health {
   market_time_et: string;
   mode: string;
   broker: string;
+  database_connected: boolean;
 }
 
 export interface Metrics {

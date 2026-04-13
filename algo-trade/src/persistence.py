@@ -143,6 +143,16 @@ class PositionStore:
         with self.SessionLocal() as session:
             return [r.symbol for r in session.query(PositionRecord.symbol).all()]
 
+    def check_connection(self) -> bool:
+        """Check if the database is reachable."""
+        try:
+            with self.SessionLocal() as session:
+                session.execute("SELECT 1")
+                return True
+        except Exception as e:
+            log.error("database connection check failed", error=str(e))
+            return False
+
     # ------------------------------------------------------------------ #
     # Signals                                                              #
     # ------------------------------------------------------------------ #

@@ -62,6 +62,7 @@ def create_app(
 
     async def health(request: web.Request) -> web.Response:
         cfg = get_config()
+        db_ok = position_store.check_connection() if position_store else False
         return web.json_response({
             "status": "ok",
             "uptime_s": round(time.time() - _START_TIME, 1),
@@ -69,6 +70,7 @@ def create_app(
             "market_time_et": now_et().strftime("%Y-%m-%d %H:%M:%S ET"),
             "mode": cfg.get("mode", "paper"),
             "broker": cfg.get("broker", {}).get("name", "mock"),
+            "database_connected": db_ok,
         })
 
     async def get_signals(request: web.Request) -> web.Response:
@@ -185,11 +187,12 @@ def create_app(
 <body>
 <h2>Algo-Trade Paper-Trade Dashboard</h2>
 <div class="warn">&#9888; PAPER TRADE MODE — No real orders are placed</div>
-<div class="card">
+    <div class="card">
   <span class="status">Market: {market_status}</span> &nbsp;|&nbsp;
   {now_et().strftime("%Y-%m-%d %H:%M:%S ET")} &nbsp;|&nbsp;
   Open positions: <b>{open_count}</b> &nbsp;|&nbsp;
   Signals: <b>{len(signal_store)}</b> &nbsp;|&nbsp;
+  Database: <b>{"CONNECTED" if (position_store.check_connection() if position_store else False) else "DISCONNECTED"}</b> &nbsp;|&nbsp;
   Uptime: {round(time.time() - _START_TIME)}s
 </div>
 {signals_html}

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { Eye, EyeOff, Bell, ChevronDown, Circle } from "lucide-react";
+import { Eye, EyeOff, Bell, ChevronDown, Circle, Database } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -23,11 +23,26 @@ interface TopbarProps {
 
 export function Topbar({ masked, onToggleMask }: TopbarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
+  const [dbConnected, setDbConnected] = useState(true);
   const [isDemo, setIsDemo] = useState(false);
   const pathname = usePathname() ?? "";
 
   useEffect(() => {
-    api.health().then((h) => setIsDemo(h.broker === "mock")).catch(() => {});
+    api.health()
+      .then((h) => {
+        setIsDemo(h.broker === "mock");
+        setDbConnected(h.database_connected);
+      })
+      .catch(() => setDbConnected(false));
+
+    // Poll status every 30 seconds
+    const timer = setInterval(() => {
+      api.health()
+        .then((h) => setDbConnected(h.database_connected))
+        .catch(() => setDbConnected(false));
+    }, 30000);
+
+    return () => clearInterval(timer);
   }, []);
   const meta = PAGE_META[pathname] ?? { title: "AlgoTrade", description: "" };
 
@@ -52,6 +67,22 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
             <span className="text-xs text-amber-400 font-medium">Demo Mode</span>
           </div>
         )}
+
+        {/* Database status */}
+        <div className={cn(
+          "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border",
+          dbConnected 
+            ? "bg-emerald-500/10 border-emerald-500/20" 
+            : "bg-rose-500/10 border-rose-500/20"
+        )}>
+          <Database className={cn(
+            "w-3 h-3",
+            dbConnected ? "text-emerald-400" : "text-rose-400"
+          )} aria-hidden />
+          <span className={cn("text-xs font-medium", dbConnected ? "text-emerald-400" : "text-rose-400")}>
+            {dbConnected ? "Connected" : "Offline"}
+          </span>
+        </div>
 
         {/* Market status */}
         <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40">
