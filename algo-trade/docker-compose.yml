@@ -11,7 +11,22 @@
 version: "3.9"
 
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: algo-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=algo_user
+      - POSTGRES_PASSWORD=algo_pass
+      - POSTGRES_DB=algo_trade
+    volumes:
+      - algo-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   algo-trade:
+    depends_on:
+      - db
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,6 +38,7 @@ services:
     environment:
       - MODE=${MODE:-paper}
       - CONFIG_PATH=/app/config.yaml
+      - DATABASE_URL=postgresql://algo_user:algo_pass@db:5432/algo_trade
     volumes:
       # Mount config and logs as writable volumes.
       - ./config.yaml:/app/config.yaml:ro
@@ -74,4 +90,6 @@ services:
 
 volumes:
   algo-logs:
+    driver: local
+  algo-db-data:
     driver: local

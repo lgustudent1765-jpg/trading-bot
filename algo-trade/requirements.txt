@@ -25,5 +25,10 @@ isort==5.13.2
 # Optional: Robinhood broker (comment out if not using)
 # robin-stocks==3.0.6
 
+# Database
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+greenlet==3.0.3
+
 # Type stubs
 types-PyYAML==6.0.12.20240311

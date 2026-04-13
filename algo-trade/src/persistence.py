@@ -1,86 +1,81 @@
 # file: src/persistence.py
 """
-JSON-based persistence for open positions and recent signals.
-
-Survives process restarts — state is written to disk after every change.
-File: data/positions.json
-
-Schema:
-{
-  "open_positions": {
-    "AAPL_2026-03-20_150.0_C": {
-      "symbol": "AAPL",
-      "option_symbol": "...",
-      "direction": "CALL",
-      "entry_price": 2.10,
-      "stop_loss": 1.50,
-      "take_profit": 3.50,
-      "quantity": 5,
-      "opened_at": "2026-03-06T09:35:00+00:00"
-    }
-  },
-  "signal_cooldowns": {
-    "AAPL": "2026-03-06T09:35:00+00:00"
-  }
-}
+SQLAlchemy-based persistence for open positions and recent signals.
+Supports SQLite (local) and PostgreSQL (Railway).
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+
+from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, JSON
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
 from src.logger import get_logger
+from src.config import get_config
 
 log = get_logger(__name__)
 
-_DATA_DIR  = Path("data")
-_STATE_FILE = _DATA_DIR / "positions.json"
+Base = declarative_base()
+
+class PositionRecord(Base):
+    __tablename__ = "positions"
+
+    option_symbol = Column(String, primary_key=True)
+    symbol = Column(String, nullable=False)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    take_profit = Column(Float, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    underlying_price = Column(Float, default=0.0)
+    opened_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class CooldownRecord(Base):
+    __tablename__ = "cooldowns"
+
+    symbol = Column(String, primary_key=True)
+    last_signal_at = Column(DateTime, nullable=False)
 
 
-def _ensure_dir() -> None:
-    _DATA_DIR.mkdir(exist_ok=True)
+class SignalRecord(Base):
+    __tablename__ = "signals"
 
-
-def _load_raw() -> Dict[str, Any]:
-    _ensure_dir()
-    if not _STATE_FILE.exists():
-        return {"open_positions": {}, "signal_cooldowns": {}}
-    try:
-        with _STATE_FILE.open() as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError) as exc:
-        log.error("failed to load state file", error=str(exc))
-        return {"open_positions": {}, "signal_cooldowns": {}}
-
-
-def _save_raw(state: Dict[str, Any]) -> None:
-    _ensure_dir()
-    try:
-        tmp = _STATE_FILE.with_suffix(".tmp")
-        with tmp.open("w") as fh:
-            json.dump(state, fh, indent=2)
-        tmp.replace(_STATE_FILE)  # atomic rename
-    except OSError as exc:
-        log.error("failed to save state file", error=str(exc))
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    direction = Column(String, nullable=False)
+    strike = Column(Float)
+    expiry = Column(String)
+    entry = Column(Float)
+    stop = Column(Float)
+    target = Column(Float)
+    size = Column(Integer)
+    rationale = Column(String)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class PositionStore:
     """
     Thread-safe (single asyncio event loop) position and cooldown store.
-    Writes to disk on every mutation.
+    Backed by SQLAlchemy (PostgreSQL or SQLite).
     """
 
     def __init__(self) -> None:
-        state = _load_raw()
-        self._positions: Dict[str, Dict[str, Any]] = state.get("open_positions", {})
-        self._cooldowns: Dict[str, str] = state.get("signal_cooldowns", {})
-        log.info(
-            "position store loaded",
-            open_positions=len(self._positions),
-        )
+        cfg = get_config()
+        db_url = cfg.get("database", {}).get("url", "sqlite:///data/algo_trade.db")
+        
+        # Handle the case where the data directory might not exist for SQLite
+        if db_url.startswith("sqlite:///data/"):
+            from pathlib import Path
+            Path("data").mkdir(exist_ok=True)
+
+        self.engine = create_engine(db_url, pool_pre_ping=True)
+        Base.metadata.create_all(self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        
+        log.info("database persistence initialised", url=db_url.split("@")[-1] if "@" in db_url else db_url)
 
     # ------------------------------------------------------------------ #
     # Positions                                                            #
@@ -97,35 +92,96 @@ class PositionStore:
         quantity: int,
         underlying_price: float = 0.0,
     ) -> None:
-        self._positions[option_symbol] = {
-            "symbol": symbol,
-            "option_symbol": option_symbol,
-            "direction": direction,
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "quantity": quantity,
-            "underlying_price": underlying_price,
-            "opened_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._flush()
-        log.info("position saved", option_symbol=option_symbol)
+        with self.SessionLocal() as session:
+            pos = PositionRecord(
+                option_symbol=option_symbol,
+                symbol=symbol,
+                direction=direction,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                quantity=quantity,
+                underlying_price=underlying_price,
+                opened_at=datetime.now(timezone.utc)
+            )
+            session.merge(pos) # merge handles update if already exists
+            session.commit()
+        log.info("position saved to db", option_symbol=option_symbol)
 
     def remove_position(self, option_symbol: str) -> None:
-        if option_symbol in self._positions:
-            del self._positions[option_symbol]
-            self._flush()
-            log.info("position removed", option_symbol=option_symbol)
+        with self.SessionLocal() as session:
+            pos = session.query(PositionRecord).filter_by(option_symbol=option_symbol).first()
+            if pos:
+                session.delete(pos)
+                session.commit()
+                log.info("position removed from db", option_symbol=option_symbol)
 
     def get_positions(self) -> Dict[str, Dict[str, Any]]:
-        return dict(self._positions)
+        with self.SessionLocal() as session:
+            records = session.query(PositionRecord).all()
+            return {
+                r.option_symbol: {
+                    "symbol": r.symbol,
+                    "option_symbol": r.option_symbol,
+                    "direction": r.direction,
+                    "entry_price": r.entry_price,
+                    "stop_loss": r.stop_loss,
+                    "take_profit": r.take_profit,
+                    "quantity": r.quantity,
+                    "underlying_price": r.underlying_price,
+                    "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                }
+                for r in records
+            }
 
     @property
     def open_count(self) -> int:
-        return len(self._positions)
+        with self.SessionLocal() as session:
+            return session.query(PositionRecord).count()
 
     def symbols(self) -> list:
-        return [v["symbol"] for v in self._positions.values()]
+        with self.SessionLocal() as session:
+            return [r.symbol for r in session.query(PositionRecord.symbol).all()]
+
+    # ------------------------------------------------------------------ #
+    # Signals                                                              #
+    # ------------------------------------------------------------------ #
+
+    def add_signal(self, data: Dict[str, Any]) -> None:
+        with self.SessionLocal() as session:
+            sig = SignalRecord(
+                symbol=data.get("symbol"),
+                direction=data.get("direction"),
+                strike=data.get("strike"),
+                expiry=data.get("expiry"),
+                entry=data.get("entry"),
+                stop=data.get("stop"),
+                target=data.get("target"),
+                size=data.get("size"),
+                rationale=data.get("rationale"),
+                timestamp=datetime.fromisoformat(data["ts"]) if "ts" in data else datetime.now(timezone.utc)
+            )
+            session.add(sig)
+            session.commit()
+
+    def get_signals(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.SessionLocal() as session:
+            records = session.query(SignalRecord).order_by(SignalRecord.timestamp.desc()).limit(limit).all()
+            return [
+                {
+                    "symbol": r.symbol,
+                    "direction": r.direction,
+                    "strike": r.strike,
+                    "expiry": r.expiry,
+                    "entry": r.entry,
+                    "stop": r.stop,
+                    "target": r.target,
+                    "size": r.size,
+                    "rationale": r.rationale,
+                    "ts": r.timestamp.isoformat() if r.timestamp else None,
+                }
+                for r in reversed(records) # return in chronological order
+            ]
 
     # ------------------------------------------------------------------ #
     # Signal cooldowns                                                     #
@@ -133,27 +189,25 @@ class PositionStore:
 
     def set_cooldown(self, symbol: str) -> None:
         """Record that a signal was just emitted for *symbol*."""
-        self._cooldowns[symbol] = datetime.now(timezone.utc).isoformat()
-        self._flush()
+        with self.SessionLocal() as session:
+            cooldown = CooldownRecord(
+                symbol=symbol,
+                last_signal_at=datetime.now(timezone.utc)
+            )
+            session.merge(cooldown)
+            session.commit()
 
     def is_on_cooldown(self, symbol: str, cooldown_minutes: int = 30) -> bool:
         """Return True if *symbol* had a signal within *cooldown_minutes*."""
-        ts_str = self._cooldowns.get(symbol)
-        if not ts_str:
-            return False
-        try:
-            last = datetime.fromisoformat(ts_str)
+        with self.SessionLocal() as session:
+            record = session.query(CooldownRecord).filter_by(symbol=symbol).first()
+            if not record:
+                return False
+            
+            # Ensure record.last_signal_at is timezone-aware if it comes from DB without it
+            last = record.last_signal_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+                
             elapsed = (datetime.now(timezone.utc) - last).total_seconds()
             return elapsed < cooldown_minutes * 60
-        except ValueError:
-            return False
-
-    # ------------------------------------------------------------------ #
-    # Internal                                                             #
-    # ------------------------------------------------------------------ #
-
-    def _flush(self) -> None:
-        _save_raw({
-            "open_positions": self._positions,
-            "signal_cooldowns": self._cooldowns,
-        })

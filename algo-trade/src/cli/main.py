@@ -63,7 +63,13 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     for sym in position_store.symbols():
         risk_manager.register_open(sym)
     if position_store.open_count:
-        log.info("restored positions from disk", count=position_store.open_count)
+        log.info("restored positions from database", count=position_store.open_count)
+
+    # Restore recent signals from DB
+    existing_signals = position_store.get_signals(limit=200)
+    _signal_store.extend(existing_signals)
+    if existing_signals:
+        log.info("restored signal history from database", count=len(existing_signals))
 
     candidate_queue: asyncio.Queue = asyncio.Queue(maxsize=20)
     chain_queue:     asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -90,7 +96,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             except asyncio.CancelledError:
                 return
             plan = sig.trade_plan
-            _signal_store.append({
+            data = {
                 "symbol":    plan.symbol,
                 "direction": plan.direction.value,
                 "strike":    plan.contract.strike,
@@ -101,7 +107,9 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
                 "size":      plan.position_size,
                 "rationale": plan.rationale,
                 "ts":        sig.timestamp.isoformat(),
-            })
+            }
+            _signal_store.append(data)
+            position_store.add_signal(data) # Persist to DB
             if len(_signal_store) > 200:
                 _signal_store.pop(0)
             await signal_queue.put(sig)  # pass on to order manager
