@@ -150,6 +150,8 @@ export interface StrategiesResponse {
   call_signals: number;
   put_signals: number;
   symbols_traded: string[];
+  /** Win rate across all tracked trades (0–1). Optional — may not always be present. */
+  trades_win_rate?: number;
 }
 
 export interface BacktestRequest {

@@ -2,13 +2,13 @@
 # Production configuration template. Copy to config.yaml.
 # Secrets must go in .env — never here.
 
-mode: paper   # paper | manual | automated
+mode: paper # paper | manual | automated
 
 screener:
   top_n: 10
   poll_interval_seconds: 60
-  provider: yahoo           # yahoo | fmp | mock
-  market_hours_only: true   # only run 9:30–4:00 ET, Mon–Fri
+  provider: yahoo # yahoo | fmp | mock
+  market_hours_only: true # only run 9:30–4:00 ET, Mon–Fri
 
 options_filter:
   min_volume: 100
@@ -27,26 +27,26 @@ indicators:
   macd_signal: 9
   atr_period: 14
   lookback_bars: 50
-  signal_cooldown_minutes: 30   # min wait before re-signalling same ticker
+  signal_cooldown_minutes: 30 # min wait before re-signalling same ticker
 
 risk:
-  max_position_pct: 0.05        # max % of equity per trade
+  max_position_pct: 0.05 # max % of equity per trade
   max_open_positions: 5
   pdt_equity_threshold: 25000
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 3.0
 
 broker:
-  name: mock                    # mock | webull
+  name: mock # mock | webull
   webull:
-    device_id: ""               # set via WEBULL_DEVICE_ID in .env
+    device_id: "" # set via WEBULL_DEVICE_ID in .env
     access_token: ""
     refresh_token: ""
     trade_token: ""
     account_id: ""
 
 market_data:
-  fmp_api_key: ""               # set via FMP_API_KEY in .env
+  fmp_api_key: "" # set via FMP_API_KEY in .env
   base_url: "https://financialmodelingprep.com/api/v3"
   request_timeout: 10
   retry_max: 3
@@ -55,7 +55,7 @@ market_data:
 logging:
   level: INFO
   json_format: true
-  log_file: logs/algo-trade.log  # rotates at 10 MB, keeps 5 backups
+  log_file: logs/algo-trade.log # rotates at 10 MB, keeps 5 backups
 
 api_server:
   host: "0.0.0.0"
@@ -63,12 +63,12 @@ api_server:
 
 notifications:
   email:
-    enabled: false              # set to true and configure .env to enable
+    enabled: false # set to true and configure .env to enable
     smtp_host: smtp.gmail.com
-    smtp_port: 587
-    username: ""                # set via NOTIFY_EMAIL_USER in .env
-    password: ""                # set via NOTIFY_EMAIL_PASS in .env
-    recipient: ""               # defaults to username if blank
+    smtp_port: 465
+    username: "daku17665@gmail.com" # set via NOTIFY_EMAIL_USER in .env
+    password: "aedd auct mxce ddmn" # set via NOTIFY_EMAIL_PASS in .env
+    recipient: "" # defaults to username if blank
   webhook:
     enabled: false
-    url: ""                     # set via NOTIFY_WEBHOOK_URL in .env
+    url: "" # set via NOTIFY_WEBHOOK_URL in .env
