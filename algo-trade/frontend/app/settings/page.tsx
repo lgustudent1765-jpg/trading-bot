@@ -416,27 +416,63 @@ export default function SettingsPage() {
             saving={saving.notify}
             saved={saved.notify}
             onSave={() => save("notify", {
-              notify_email_enabled:   cfg.notify_email_enabled,
-              notify_email_username:  cfg.notify_email_username,
-              notify_email_password:  cfg.notify_email_password,
-              notify_email_recipient: cfg.notify_email_recipient,
-              notify_webhook_enabled: cfg.notify_webhook_enabled,
-              notify_webhook_url:     cfg.notify_webhook_url,
+              notify_email_enabled:    cfg.notify_email_enabled,
+              notify_email_smtp_host:  cfg.notify_email_smtp_host,
+              notify_email_smtp_port:  cfg.notify_email_smtp_port,
+              notify_email_username:   cfg.notify_email_username,
+              notify_email_password:   cfg.notify_email_password,
+              notify_email_recipient:  cfg.notify_email_recipient,
+              notify_webhook_enabled:  cfg.notify_webhook_enabled,
+              notify_webhook_url:      cfg.notify_webhook_url,
             })}
           />
         </CardHeader>
         <CardContent className="space-y-4">
           <Toggle
             label="Email Alerts"
-            description="Send trade notifications via Gmail"
+            description="Send trade notifications via SMTP"
             checked={cfg.notify_email_enabled ?? false}
             onChange={(v) => set("notify_email_enabled", v)}
           />
           {cfg.notify_email_enabled && (
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Gmail Address"   type="email"    value={cfg.notify_email_username  ?? ""} onChange={(e) => set("notify_email_username",  e.target.value)} />
-              <Input label="App Password"    type="password" placeholder="••••••••"              value={cfg.notify_email_password  ?? ""} onChange={(e) => set("notify_email_password",  e.target.value)} />
-              <Input label="Recipient Email" type="email"    placeholder="Defaults to sender"   value={cfg.notify_email_recipient ?? ""} onChange={(e) => set("notify_email_recipient", e.target.value)} />
+              <Input
+                label="SMTP Host"
+                type="text"
+                placeholder="smtp.gmail.com"
+                value={cfg.notify_email_smtp_host ?? ""}
+                onChange={(e) => set("notify_email_smtp_host", e.target.value)}
+              />
+              <Input
+                label="SMTP Port"
+                type="number"
+                min={1}
+                max={65535}
+                placeholder="587"
+                value={cfg.notify_email_smtp_port ?? 587}
+                onChange={(e) => set("notify_email_smtp_port", Number(e.target.value))}
+              />
+              <Input
+                label="Sender Email"
+                type="email"
+                placeholder="you@gmail.com"
+                value={cfg.notify_email_username ?? ""}
+                onChange={(e) => set("notify_email_username", e.target.value)}
+              />
+              <Input
+                label="App Password"
+                type="password"
+                placeholder={cfg.notify_email_password_set ? "••••••••  (already set)" : "Enter app password…"}
+                value={cfg.notify_email_password ?? ""}
+                onChange={(e) => set("notify_email_password", e.target.value)}
+              />
+              <Input
+                label="Recipient Email"
+                type="email"
+                placeholder="Defaults to sender"
+                value={cfg.notify_email_recipient ?? ""}
+                onChange={(e) => set("notify_email_recipient", e.target.value)}
+              />
             </div>
           )}
 

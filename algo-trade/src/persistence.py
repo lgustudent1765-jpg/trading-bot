@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 
-from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, JSON
+from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, JSON, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -147,7 +147,7 @@ class PositionStore:
         """Check if the database is reachable."""
         try:
             with self.SessionLocal() as session:
-                session.execute("SELECT 1")
+                session.execute(text("SELECT 1"))
                 return True
         except Exception as e:
             log.error("database connection check failed", error=str(e))

@@ -73,8 +73,11 @@ export interface ConfigPayload {
   risk_stop_loss_atr_mult?: number;
   risk_take_profit_atr_mult?: number;
   notify_email_enabled?: boolean;
+  notify_email_smtp_host?: string;
+  notify_email_smtp_port?: number;
   notify_email_username?: string;
   notify_email_password?: string;
+  notify_email_password_set?: boolean;
   notify_email_recipient?: string;
   notify_webhook_enabled?: boolean;
   notify_webhook_url?: string;

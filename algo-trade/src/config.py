@@ -188,14 +188,21 @@ def get_config() -> Dict[str, Any]:
 
 
 def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge *updates* into the live in-memory config (no restart required).
+    """Merge *updates* into the live in-memory config and persist to config.yaml.
 
-    Changes are applied immediately but are not persisted to disk, so they
-    will be lost on the next container restart or redeploy.  Set Railway
-    environment variables for permanent changes.
+    Changes apply immediately without restart. Values set via environment
+    variables take precedence on next full load_config() call.
     """
     global _CONFIG
     if _CONFIG is None:
         _CONFIG = load_config()
     _CONFIG = _deep_merge(_CONFIG, updates)
+    # Persist to disk so settings survive restarts
+    try:
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _CONFIG_PATH.open("w") as fh:
+            yaml.dump(_CONFIG, fh, default_flow_style=False, allow_unicode=True)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Failed to persist config to %s: %s", _CONFIG_PATH, exc)
     return _CONFIG

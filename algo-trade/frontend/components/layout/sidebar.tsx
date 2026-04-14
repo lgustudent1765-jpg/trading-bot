@@ -19,6 +19,7 @@ const navItems = [
   { href: "/positions",  icon: Briefcase,        label: "Positions",   sub: "Open & closed trades" },
   { href: "/strategies", icon: BarChart2,        label: "Strategies",  sub: "Strategy performance" },
   { href: "/backtest",   icon: FlaskConical,     label: "Backtest",    sub: "Test a strategy" },
+  { href: "/settings",   icon: Settings,         label: "Settings",    sub: "Broker, SMTP & keys" },
 ];
 
 export function Sidebar() {
@@ -69,28 +70,6 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Bottom: Settings */}
-      <div className="px-2 pt-3 border-t border-zinc-800/60">
-        <Link
-          href="/settings"
-          className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors duration-150",
-            pathname === "/settings"
-              ? "bg-emerald-500/10 text-emerald-400"
-              : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80"
-          )}
-        >
-          <Settings className="w-[17px] h-[17px] shrink-0" aria-hidden />
-          <div>
-            <p className={cn("text-sm font-medium leading-none", pathname === "/settings" ? "text-emerald-400" : "")}>
-              Settings
-            </p>
-            <p className={cn("text-[11px] leading-none mt-0.5", pathname === "/settings" ? "text-emerald-600" : "text-zinc-600")}>
-              Broker & API keys
-            </p>
-          </div>
-        </Link>
-      </div>
     </aside>
   );
 }

@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 import os
 
 from src.logger import get_logger
+from src.config import get_config
 
 log = get_logger(__name__)
 
@@ -43,50 +44,65 @@ class Notifier:
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
-        notif = config.get("notifications", {})
+        # Store initial config but always read live values from get_config() at send time.
+        pass
 
-        email_cfg = notif.get("email", {})
-        self._email_enabled: bool = email_cfg.get("enabled", False)
-        self._smtp_host: str = email_cfg.get("smtp_host", "smtp.gmail.com")
-        self._smtp_port: int = int(email_cfg.get("smtp_port", 587))
-        self._email_user: str = os.getenv("NOTIFY_EMAIL_USER", email_cfg.get("username", ""))
-        self._email_pass: str = os.getenv("NOTIFY_EMAIL_PASS", email_cfg.get("password", ""))
-        self._email_to: str = email_cfg.get("recipient", self._email_user)
+    def _get_email_cfg(self):
+        """Read live email config so Settings UI changes take effect without restart."""
+        cfg = get_config()
+        notif = cfg.get("notifications", {})
+        email = notif.get("email", {})
+        return {
+            "enabled":   email.get("enabled", False),
+            "smtp_host": email.get("smtp_host", "smtp.gmail.com"),
+            "smtp_port": int(email.get("smtp_port", 587)),
+            "user":      os.getenv("NOTIFY_EMAIL_USER", email.get("username", "")),
+            "password":  os.getenv("NOTIFY_EMAIL_PASS", email.get("password", "")),
+            "to":        email.get("recipient", "") or os.getenv("NOTIFY_EMAIL_USER", email.get("username", "")),
+        }
 
-        webhook_cfg = notif.get("webhook", {})
-        self._webhook_enabled: bool = webhook_cfg.get("enabled", False)
-        self._webhook_url: str = os.getenv("NOTIFY_WEBHOOK_URL", webhook_cfg.get("url", ""))
+    def _get_webhook_cfg(self):
+        """Read live webhook config so Settings UI changes take effect without restart."""
+        cfg = get_config()
+        notif = cfg.get("notifications", {})
+        webhook = notif.get("webhook", {})
+        return {
+            "enabled": webhook.get("enabled", False),
+            "url":     os.getenv("NOTIFY_WEBHOOK_URL", webhook.get("url", "")),
+        }
 
     def _send_email_sync(self, subject: str, body: str) -> None:
         """Synchronous email send — called from thread executor."""
-        if not self._email_user or not self._email_pass:
+        ec = self._get_email_cfg()
+        if not ec["user"] or not ec["password"]:
             log.warning("email not configured — set NOTIFY_EMAIL_USER and NOTIFY_EMAIL_PASS")
             return
         try:
             msg = MIMEText(body)
             msg["Subject"] = subject
-            msg["From"] = self._email_user
-            msg["To"] = self._email_to
+            msg["From"] = ec["user"]
+            msg["To"] = ec["to"]
 
             context = ssl.create_default_context()
-            with smtplib.SMTP(self._smtp_host, self._smtp_port) as server:
+            with smtplib.SMTP(ec["smtp_host"], ec["smtp_port"]) as server:
                 server.starttls(context=context)
-                server.login(self._email_user, self._email_pass)
-                server.sendmail(self._email_user, self._email_to, msg.as_string())
+                server.login(ec["user"], ec["password"])
+                server.sendmail(ec["user"], ec["to"], msg.as_string())
             log.info("email alert sent", subject=subject)
         except Exception as exc:
             log.error("email send failed", error=str(exc))
 
     async def _send_webhook(self, message: str) -> None:
         """Send a webhook POST (Discord/Slack format)."""
-        if not self._webhook_url:
+        wc = self._get_webhook_cfg()
+        if not wc["url"]:
             log.warning("webhook not configured — set NOTIFY_WEBHOOK_URL")
             return
         try:
             import aiohttp
             payload = {"content": message}  # Discord format
             async with aiohttp.ClientSession() as session:
-                async with session.post(self._webhook_url, json=payload) as resp:
+                async with session.post(wc["url"], json=payload) as resp:
                     if resp.status not in (200, 204):
                         log.warning("webhook returned non-200", status=resp.status)
         except Exception as exc:
@@ -95,10 +111,10 @@ class Notifier:
     async def send(self, subject: str, body: str) -> None:
         """Send alert via all configured channels (non-blocking)."""
         tasks = []
-        if self._email_enabled:
+        if self._get_email_cfg()["enabled"]:
             loop = asyncio.get_event_loop()
             tasks.append(loop.run_in_executor(None, self._send_email_sync, subject, body))
-        if self._webhook_enabled:
+        if self._get_webhook_cfg()["enabled"]:
             tasks.append(self._send_webhook(f"**{subject}**\n{body}"))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)

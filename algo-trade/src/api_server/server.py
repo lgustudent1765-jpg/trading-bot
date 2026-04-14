@@ -43,6 +43,7 @@ _POSITIVE_INT_FIELDS = {
     "screener_top_n",
     "risk_max_open_positions",
     "risk_pdt_equity_threshold",
+    "notify_email_smtp_port",
 }
 _POSITIVE_FLOAT_FIELDS = {
     "risk_max_position_pct",
@@ -236,7 +237,10 @@ def create_app(
             "risk_stop_loss_atr_mult": risk.get("stop_loss_atr_mult", 1.5),
             "risk_take_profit_atr_mult": risk.get("take_profit_atr_mult", 3.0),
             "notify_email_enabled": email.get("enabled", False),
+            "notify_email_smtp_host": email.get("smtp_host", "smtp.gmail.com"),
+            "notify_email_smtp_port": int(email.get("smtp_port", 587)),
             "notify_email_username": email.get("username", ""),
+            "notify_email_password_set": bool(email.get("password", "")),
             "notify_email_recipient": email.get("recipient", ""),
             "notify_webhook_enabled": webhook.get("enabled", False),
             "notify_webhook_url": webhook.get("url", ""),
@@ -322,6 +326,8 @@ def create_app(
             "risk_stop_loss_atr_mult":      ["risk", "stop_loss_atr_mult"],
             "risk_take_profit_atr_mult":    ["risk", "take_profit_atr_mult"],
             "notify_email_enabled":         ["notifications", "email", "enabled"],
+            "notify_email_smtp_host":       ["notifications", "email", "smtp_host"],
+            "notify_email_smtp_port":       ["notifications", "email", "smtp_port"],
             "notify_email_username":        ["notifications", "email", "username"],
             "notify_email_password":        ["notifications", "email", "password"],
             "notify_email_recipient":       ["notifications", "email", "recipient"],
