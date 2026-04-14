@@ -84,11 +84,27 @@ class Notifier:
             msg["To"] = ec["to"]
 
             context = ssl.create_default_context()
-            with smtplib.SMTP(ec["smtp_host"], ec["smtp_port"]) as server:
-                server.starttls(context=context)
-                server.login(ec["user"], ec["password"])
-                server.sendmail(ec["user"], ec["to"], msg.as_string())
+            if ec["smtp_port"] == 465:
+                # Direct TLS (SMTP_SSL)
+                with smtplib.SMTP_SSL(ec["smtp_host"], ec["smtp_port"], context=context) as server:
+                    server.login(ec["user"], ec["password"])
+                    server.sendmail(ec["user"], ec["to"], msg.as_string())
+            else:
+                # STARTTLS (port 587 or custom)
+                with smtplib.SMTP(ec["smtp_host"], ec["smtp_port"]) as server:
+                    server.starttls(context=context)
+                    server.login(ec["user"], ec["password"])
+                    server.sendmail(ec["user"], ec["to"], msg.as_string())
             log.info("email alert sent", subject=subject)
+        except OSError as exc:
+            if getattr(exc, "errno", None) in (101, 111, 110):
+                log.error(
+                    "email send failed — SMTP port blocked by hosting platform. "
+                    "Use the webhook channel (Discord/Slack) instead.",
+                    error=str(exc),
+                )
+            else:
+                log.error("email send failed", error=str(exc))
         except Exception as exc:
             log.error("email send failed", error=str(exc))
 

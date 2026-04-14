@@ -410,10 +410,15 @@ def create_app(
             loop = asyncio.get_event_loop()
 
             def _send():
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as srv:
-                    srv.starttls(context=context)
-                    srv.login(user, password)
-                    srv.sendmail(user, recipient, msg.as_string())
+                if smtp_port == 465:
+                    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=15) as srv:
+                        srv.login(user, password)
+                        srv.sendmail(user, recipient, msg.as_string())
+                else:
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as srv:
+                        srv.starttls(context=context)
+                        srv.login(user, password)
+                        srv.sendmail(user, recipient, msg.as_string())
 
             await loop.run_in_executor(None, _send)
             log.info("test email sent", recipient=recipient)
@@ -428,6 +433,21 @@ def create_app(
                 {"error": f"Cannot connect to {smtp_host}:{smtp_port}. Check host/port settings."},
                 status=500,
             )
+        except OSError as exc:
+            if getattr(exc, "errno", None) in (101, 111, 110):
+                log.error("test email failed — SMTP blocked by platform", error=str(exc))
+                return web.json_response(
+                    {"error": (
+                        f"Cannot reach {smtp_host}:{smtp_port} — your hosting platform (Railway) "
+                        "blocks outbound SMTP ports. "
+                        "Workaround: enable the Discord/Slack webhook channel in Settings instead, "
+                        "or use an HTTP-based mail API (e.g. SendGrid, Mailgun) and set the SMTP relay "
+                        "host they provide (usually port 587 on their own domain)."
+                    )},
+                    status=500,
+                )
+            log.error("test email failed", error=str(exc))
+            return web.json_response({"error": str(exc)}, status=500)
         except Exception as exc:
             log.error("test email failed", error=str(exc))
             return web.json_response({"error": str(exc)}, status=500)
