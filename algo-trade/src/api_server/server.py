@@ -456,8 +456,8 @@ def create_app(
                         {"error": f"{provider} API returned {status_code}: {resp_body}"},
                         status=500,
                     )
-                log.info("test email sent via api", provider=provider, recipient=recipient)
-                return web.json_response({"ok": True, "recipient": recipient, "provider": provider})
+                log.info("test email sent via api", provider=provider, recipient=recipient, api_response=resp_body)
+                return web.json_response({"ok": True, "recipient": recipient, "provider": provider, "api_response": resp_body})
             except Exception as exc:
                 log.error("test email api failed", provider=provider, error=str(exc))
                 return web.json_response({"error": str(exc)}, status=500)
