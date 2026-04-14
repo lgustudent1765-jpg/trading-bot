@@ -168,9 +168,9 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
                 "enabled":   False,
                 "smtp_host": "smtp.gmail.com",
                 "smtp_port": 587,
-                "username":  os.getenv("NOTIFY_EMAIL_USER", ""),
-                "password":  os.getenv("NOTIFY_EMAIL_PASS", ""),
-                "recipient": os.getenv("NOTIFY_EMAIL_USER", ""),
+                "username":  os.getenv("NOTIFY_EMAIL_USER") or "",
+                "password":  os.getenv("NOTIFY_EMAIL_PASS") or "",
+                "recipient": os.getenv("NOTIFY_EMAIL_USER") or "",
             },
             "webhook": {
                 "enabled": False,

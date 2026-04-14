@@ -56,9 +56,9 @@ class Notifier:
             "enabled":   email.get("enabled", False),
             "smtp_host": email.get("smtp_host", "smtp.gmail.com"),
             "smtp_port": int(email.get("smtp_port", 587)),
-            "user":      os.getenv("NOTIFY_EMAIL_USER", email.get("username", "")),
-            "password":  os.getenv("NOTIFY_EMAIL_PASS", email.get("password", "")),
-            "to":        email.get("recipient", "") or os.getenv("NOTIFY_EMAIL_USER", email.get("username", "")),
+            "user":      os.getenv("NOTIFY_EMAIL_USER") or email.get("username", ""),
+            "password":  os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", ""),
+            "to":        email.get("recipient", "") or os.getenv("NOTIFY_EMAIL_USER") or email.get("username", ""),
         }
 
     def _get_webhook_cfg(self):

@@ -381,8 +381,8 @@ def create_app(
         if not email.get("enabled", False):
             return web.json_response({"error": "Email alerts are disabled — enable them first."}, status=400)
 
-        user     = os.getenv("NOTIFY_EMAIL_USER", email.get("username", ""))
-        password = os.getenv("NOTIFY_EMAIL_PASS", email.get("password", ""))
+        user     = os.getenv("NOTIFY_EMAIL_USER") or email.get("username", "")
+        password = os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", "")
         recipient = email.get("recipient", "") or user
         smtp_host = email.get("smtp_host", "smtp.gmail.com")
         smtp_port = int(email.get("smtp_port", 587))
