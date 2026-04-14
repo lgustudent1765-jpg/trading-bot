@@ -10,6 +10,7 @@ import {
   BarChart2,
   FlaskConical,
   Settings,
+  ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const navItems = [
   { href: "/dashboard",  icon: LayoutDashboard, label: "Dashboard",   sub: "Overview & portfolio" },
   { href: "/signals",    icon: Zap,             label: "Signals",     sub: "Buy / sell signals" },
   { href: "/positions",  icon: Briefcase,        label: "Positions",   sub: "Open & closed trades" },
+  { href: "/history",    icon: ScrollText,       label: "History",     sub: "Actions & activity log" },
   { href: "/strategies", icon: BarChart2,        label: "Strategies",  sub: "Strategy performance" },
   { href: "/backtest",   icon: FlaskConical,     label: "Backtest",    sub: "Test a strategy" },
   { href: "/settings",   icon: Settings,         label: "Settings",    sub: "Broker, SMTP & keys" },

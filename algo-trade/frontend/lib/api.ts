@@ -109,6 +109,7 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   }).then((r) => r.json() as Promise<BacktestResponse>),
+  history:      (limit = 50)              => fetchJSON<Action[]>(`/history?limit=${limit}`),
   getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
   updateConfig: (payload: ConfigPayload)  => fetch(`${API_BASE}/config`, {
     method: "POST",
@@ -177,6 +178,21 @@ export interface BacktestResponse {
   symbol: string;
   period: string;
   error?: string;
+}
+
+export type ActionEvent =
+  | "ORDER_FILLED"
+  | "POSITION_CLOSED"
+  | "SIGNAL_REJECTED"
+  | "SYSTEM_STARTED"
+  | "SYSTEM_STOPPED";
+
+export interface Action {
+  event: ActionEvent;
+  symbol: string | null;
+  detail: string;
+  data: Record<string, unknown>;
+  ts: string;
 }
 
 export function formatUptime(seconds: number): string {
