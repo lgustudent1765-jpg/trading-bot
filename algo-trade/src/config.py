@@ -46,14 +46,17 @@ def _load_dotenv(path: Path) -> None:
                 os.environ[key] = val
 
 
-def _deep_merge(base: Dict, override: Dict) -> Dict:
+def deep_merge(base: Dict, override: Dict) -> Dict:
     result = dict(base)
     for key, val in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
-            result[key] = _deep_merge(result[key], val)
+            result[key] = deep_merge(result[key], val)
         else:
             result[key] = val
     return result
+
+# Keep underscore alias for internal callers
+_deep_merge = deep_merge
 
 
 def _apply_env_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,7 +177,7 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
         },
     }
 
-    merged = _deep_merge(defaults, raw)
+    merged = deep_merge(defaults, raw)
     merged = _apply_env_overrides(merged)
     _CONFIG = merged
     return merged
@@ -196,7 +199,7 @@ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     global _CONFIG
     if _CONFIG is None:
         _CONFIG = load_config()
-    _CONFIG = _deep_merge(_CONFIG, updates)
+    _CONFIG = deep_merge(_CONFIG, updates)
     # Persist to disk so settings survive restarts
     try:
         _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

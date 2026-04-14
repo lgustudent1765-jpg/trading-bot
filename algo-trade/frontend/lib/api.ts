@@ -115,6 +115,9 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }).then((r) => { if (!r.ok) throw new Error(`config update failed: ${r.status}`); }),
+  testEmail:    ()                        => fetch(`${API_BASE}/config/test-email`, {
+    method: "POST",
+  }).then((r) => r.json() as Promise<{ ok?: boolean; recipient?: string; error?: string }>),
 };
 
 export interface MarketMover {

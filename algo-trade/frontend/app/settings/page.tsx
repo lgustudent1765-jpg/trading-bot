@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info } from "lucide-react";
+import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, type ConfigPayload } from "@/lib/api";
@@ -154,6 +154,8 @@ export default function SettingsPage() {
   const [maskedFields, setMaskedFields] = useState<Set<keyof ConfigPayload>>(new Set());
   const [saving, setSaving] = useState<SavingState>({ broker: false, market: false, risk: false, notify: false });
   const [saved,  setSaved]  = useState<SavedState>({ broker: false, market: false, risk: false, notify: false });
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [testResult,   setTestResult]   = useState<{ ok: boolean; message: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -199,6 +201,24 @@ export default function SettingsPage() {
       setSaveError("Save failed — check that the backend is running.");
     } finally {
       setSaving((s) => ({ ...s, [section]: false }));
+    }
+  }
+
+  async function sendTestEmail() {
+    setTestingEmail(true);
+    setTestResult(null);
+    try {
+      const res = await api.testEmail();
+      if (res.ok) {
+        setTestResult({ ok: true, message: `Test email sent to ${res.recipient}` });
+      } else {
+        setTestResult({ ok: false, message: res.error ?? "Unknown error" });
+      }
+    } catch {
+      setTestResult({ ok: false, message: "Cannot reach backend." });
+    } finally {
+      setTestingEmail(false);
+      setTimeout(() => setTestResult(null), 8000);
     }
   }
 
@@ -473,6 +493,40 @@ export default function SettingsPage() {
                 value={cfg.notify_email_recipient ?? ""}
                 onChange={(e) => set("notify_email_recipient", e.target.value)}
               />
+            </div>
+          )}
+          {cfg.notify_email_enabled && (
+            <div className="space-y-2">
+              <button
+                onClick={sendTestEmail}
+                disabled={testingEmail}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  testingEmail
+                    ? "opacity-50 cursor-not-allowed bg-zinc-800 border-zinc-700 text-zinc-400"
+                    : "bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20"
+                )}
+              >
+                {testingEmail
+                  ? <RefreshCw className="w-3 h-3 animate-spin" />
+                  : <Send className="w-3 h-3" />
+                }
+                {testingEmail ? "Sending…" : "Send Test Email"}
+              </button>
+              {testResult && (
+                <div className={cn(
+                  "flex items-start gap-2 rounded-lg px-3 py-2 text-xs border",
+                  testResult.ok
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                    : "bg-red-500/10 border-red-500/30 text-red-300"
+                )}>
+                  {testResult.ok
+                    ? <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    : <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  }
+                  <span className="leading-relaxed">{testResult.message}</span>
+                </div>
+              )}
             </div>
           )}
 

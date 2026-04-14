@@ -6,15 +6,16 @@ Supports SQLite (local) and PostgreSQL (Railway).
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 
-from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, JSON, text
+from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, JSON, Text, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.logger import get_logger
-from src.config import get_config
+from src.config import get_config, deep_merge
 
 log = get_logger(__name__)
 
@@ -54,6 +55,14 @@ class SignalRecord(Base):
     size = Column(Integer)
     rationale = Column(String)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ConfigOverrideRecord(Base):
+    """Stores UI-driven config overrides so they survive Railway redeployments."""
+    __tablename__ = "config_overrides"
+
+    key        = Column(String, primary_key=True)
+    value_json = Column(Text, nullable=False, default="{}")
 
 
 class PositionStore:
@@ -152,6 +161,43 @@ class PositionStore:
         except Exception as e:
             log.error("database connection check failed", error=str(e))
             return False
+
+    # ------------------------------------------------------------------ #
+    # Config overrides (Railway-safe persistence)                          #
+    # ------------------------------------------------------------------ #
+
+    _CFG_KEY = "main"
+
+    def get_config_overrides(self) -> Dict[str, Any]:
+        """Return the stored nested config-override dict (empty dict if none saved yet)."""
+        try:
+            with self.SessionLocal() as session:
+                record = session.query(ConfigOverrideRecord).filter_by(key=self._CFG_KEY).first()
+                if not record:
+                    return {}
+                return json.loads(record.value_json)
+        except Exception as exc:
+            log.warning("could not read config_overrides", error=str(exc))
+            return {}
+
+    def set_config_overrides(self, overrides: Dict[str, Any]) -> None:
+        """Persist the full nested config-override dict to the database."""
+        try:
+            with self.SessionLocal() as session:
+                record = ConfigOverrideRecord(
+                    key=self._CFG_KEY,
+                    value_json=json.dumps(overrides, default=str),
+                )
+                session.merge(record)
+                session.commit()
+        except Exception as exc:
+            log.error("could not save config_overrides", error=str(exc))
+
+    def merge_config_overrides(self, updates: Dict[str, Any]) -> None:
+        """Deep-merge *updates* into existing DB overrides and save."""
+        existing = self.get_config_overrides()
+        merged   = deep_merge(existing, updates)
+        self.set_config_overrides(merged)
 
     # ------------------------------------------------------------------ #
     # Signals                                                              #

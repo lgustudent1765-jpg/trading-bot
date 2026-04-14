@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname } from "next/navigation";
-import { Eye, EyeOff, Bell, ChevronDown, Circle, Database } from "lucide-react";
+import { Eye, EyeOff, Bell, ChevronDown, Circle, Database, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, type Signal } from "@/lib/api";
 
 const PAGE_META: Record<string, { title: string; description: string }> = {
   "/dashboard":  { title: "Dashboard",   description: "Your portfolio overview and live market data" },
@@ -16,34 +16,116 @@ const PAGE_META: Record<string, { title: string; description: string }> = {
   "/settings":   { title: "Settings",    description: "Configure your broker, API keys, and risk limits" },
 };
 
+const POLL_MS = 15_000; // 15-second signal poll
+
+interface NotifEntry {
+  id: string;          // signal ts — unique key
+  type: "success" | "warning" | "info";
+  message: string;
+  time: string;        // ISO string for relative formatting
+}
+
+function relativeTime(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60)   return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function signalToNotif(s: Signal): NotifEntry {
+  const dir = s.direction === "CALL" ? "CALL (bullish)" : "PUT (bearish)";
+  return {
+    id: s.ts,
+    type: s.direction === "CALL" ? "success" : "warning",
+    message: `Signal: ${s.symbol} ${dir} — entry $${s.entry?.toFixed(2) ?? "—"}, target $${s.target?.toFixed(2) ?? "—"}`,
+    time: s.ts,
+  };
+}
+
 interface TopbarProps {
   masked: boolean;
   onToggleMask: () => void;
 }
 
 export function Topbar({ masked, onToggleMask }: TopbarProps) {
-  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifOpen, setNotifOpen]     = useState(false);
+  const [notifs, setNotifs]           = useState<NotifEntry[]>([]);
+  const [unread, setUnread]           = useState(0);
   const [dbConnected, setDbConnected] = useState(true);
-  const [isDemo, setIsDemo] = useState(false);
+  const [marketOpen, setMarketOpen]   = useState(false);
+  const [isDemo, setIsDemo]           = useState(false);
   const pathname = usePathname() ?? "";
+  const panelRef  = useRef<HTMLDivElement>(null);
+  const seenRef   = useRef<Set<string>>(new Set());
+
+  // ── Fetch signals and diff against seen set ──────────────────────────────
+  const pollSignals = useCallback(async () => {
+    try {
+      const signals = await api.signals(50);
+      const fresh: NotifEntry[] = [];
+      for (const s of signals) {
+        if (!seenRef.current.has(s.ts)) {
+          seenRef.current.add(s.ts);
+          fresh.push(signalToNotif(s));
+        }
+      }
+      if (fresh.length) {
+        setNotifs((prev) => {
+          const merged = [...fresh.reverse(), ...prev].slice(0, 30);
+          return merged;
+        });
+        if (!notifOpen) setUnread((n) => n + fresh.length);
+      }
+    } catch {
+      // backend unreachable — silent
+    }
+  }, [notifOpen]);
+
+  // ── Health poll ──────────────────────────────────────────────────────────
+  const pollHealth = useCallback(async () => {
+    try {
+      const h = await api.health();
+      setIsDemo(h.broker === "mock");
+      setDbConnected(h.database_connected);
+      setMarketOpen(h.market_open);
+    } catch {
+      setDbConnected(false);
+    }
+  }, []);
 
   useEffect(() => {
-    api.health()
-      .then((h) => {
-        setIsDemo(h.broker === "mock");
-        setDbConnected(h.database_connected);
-      })
-      .catch(() => setDbConnected(false));
+    pollHealth();
+    pollSignals();
+    const healthTimer  = setInterval(pollHealth,  30_000);
+    const signalTimer  = setInterval(pollSignals, POLL_MS);
+    return () => { clearInterval(healthTimer); clearInterval(signalTimer); };
+  }, [pollHealth, pollSignals]);
 
-    // Poll status every 30 seconds
-    const timer = setInterval(() => {
-      api.health()
-        .then((h) => setDbConnected(h.database_connected))
-        .catch(() => setDbConnected(false));
-    }, 30000);
+  // ── Close panel on outside click ─────────────────────────────────────────
+  useEffect(() => {
+    if (!notifOpen) return;
+    function handler(e: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [notifOpen]);
 
-    return () => clearInterval(timer);
-  }, []);
+  function openPanel() {
+    setNotifOpen((o) => {
+      if (!o) setUnread(0); // mark all read on open
+      return !o;
+    });
+  }
+
+  function clearAll() {
+    setNotifs([]);
+    setUnread(0);
+  }
+
   const meta = PAGE_META[pathname] ?? { title: "AlgoTrade", description: "" };
 
   return (
@@ -60,7 +142,7 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
 
       {/* Right: controls */}
       <div className="flex items-center gap-2 shrink-0">
-        {/* Demo mode badge — only shown when broker=mock */}
+        {/* Demo mode badge */}
         {isDemo && (
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
@@ -71,23 +153,30 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
         {/* Database status */}
         <div className={cn(
           "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border",
-          dbConnected 
-            ? "bg-emerald-500/10 border-emerald-500/20" 
+          dbConnected
+            ? "bg-emerald-500/10 border-emerald-500/20"
             : "bg-rose-500/10 border-rose-500/20"
         )}>
-          <Database className={cn(
-            "w-3 h-3",
-            dbConnected ? "text-emerald-400" : "text-rose-400"
-          )} aria-hidden />
+          <Database className={cn("w-3 h-3", dbConnected ? "text-emerald-400" : "text-rose-400")} aria-hidden />
           <span className={cn("text-xs font-medium", dbConnected ? "text-emerald-400" : "text-rose-400")}>
             {dbConnected ? "Connected" : "Offline"}
           </span>
         </div>
 
-        {/* Market status */}
-        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40">
-          <Circle className="w-2 h-2 fill-emerald-400 text-emerald-400" aria-hidden />
-          <span className="text-xs text-zinc-400">Market Open</span>
+        {/* Market status — live from health */}
+        <div className={cn(
+          "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border",
+          marketOpen
+            ? "bg-zinc-800/60 border-zinc-700/40"
+            : "bg-zinc-900 border-zinc-800"
+        )}>
+          <Circle className={cn(
+            "w-2 h-2",
+            marketOpen ? "fill-emerald-400 text-emerald-400" : "fill-zinc-600 text-zinc-600"
+          )} aria-hidden />
+          <span className={cn("text-xs", marketOpen ? "text-zinc-400" : "text-zinc-600")}>
+            {marketOpen ? "Market Open" : "Market Closed"}
+          </span>
         </div>
 
         {/* Balance toggle */}
@@ -106,23 +195,75 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
         </button>
 
         {/* Notifications */}
-        <div className="relative">
+        <div className="relative" ref={panelRef}>
           <button
-            onClick={() => setNotifOpen((o) => !o)}
+            onClick={openPanel}
             className="relative flex items-center justify-center w-9 h-9 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
             aria-label="Notifications"
+            aria-expanded={notifOpen}
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden />
+            {unread > 0 ? (
+              <span className="absolute top-1.5 right-1.5 min-w-[14px] h-[14px] rounded-full bg-emerald-500 flex items-center justify-center">
+                <span className="text-[9px] font-bold text-white leading-none px-0.5">
+                  {unread > 9 ? "9+" : unread}
+                </span>
+              </span>
+            ) : notifs.length > 0 ? (
+              <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden />
+            ) : null}
           </button>
+
           {notifOpen && (
-            <div className="absolute right-0 mt-2 w-72 rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl z-50 py-2">
-              <p className="px-4 py-2 text-xs font-medium text-zinc-500 uppercase tracking-wider">
-                Notifications
-              </p>
-              <NotifItem type="success" message="Buy order for AAPL filled at $182.50" time="2m ago" />
-              <NotifItem type="warning" message="Stop-loss triggered on TSLA position" time="14m ago" />
-              <NotifItem type="info"    message="Strategy RSI-Reversion generated 3 signals" time="1h ago" />
+            <div className="absolute right-0 mt-2 w-80 rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+                <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
+                  Notifications
+                  {notifs.length > 0 && (
+                    <span className="ml-1.5 text-zinc-600 normal-case font-normal">({notifs.length})</span>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  {notifs.length > 0 && (
+                    <button
+                      onClick={clearAll}
+                      className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setNotifOpen(false)}
+                    className="text-zinc-600 hover:text-zinc-300 transition-colors"
+                    aria-label="Close"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="max-h-80 overflow-y-auto">
+                {notifs.length === 0 ? (
+                  <div className="px-4 py-8 text-center">
+                    <Bell className="w-6 h-6 text-zinc-700 mx-auto mb-2" />
+                    <p className="text-xs text-zinc-600">No notifications yet.</p>
+                    <p className="text-[11px] text-zinc-700 mt-0.5">
+                      New signals will appear here in real time.
+                    </p>
+                  </div>
+                ) : (
+                  notifs.map((n) => (
+                    <NotifItem key={n.id} type={n.type} message={n.message} time={n.time} />
+                  ))
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-4 py-2 border-t border-zinc-800 text-[11px] text-zinc-600">
+                Polling every {POLL_MS / 1000}s · {notifs.length} total
+              </div>
             </div>
           )}
         </div>
@@ -139,14 +280,27 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
   );
 }
 
-function NotifItem({ type, message, time }: { type: "success" | "warning" | "info"; message: string; time: string }) {
-  const dot = { success: "bg-emerald-400", warning: "bg-amber-400", info: "bg-blue-400" }[type];
+function NotifItem({
+  type,
+  message,
+  time,
+}: {
+  type: "success" | "warning" | "info";
+  message: string;
+  time: string;
+}) {
+  const dot = {
+    success: "bg-emerald-400",
+    warning: "bg-amber-400",
+    info:    "bg-blue-400",
+  }[type];
+
   return (
-    <div className="flex items-start gap-3 px-4 py-2.5 hover:bg-zinc-800/50 transition-colors cursor-default">
+    <div className="flex items-start gap-3 px-4 py-2.5 hover:bg-zinc-800/50 transition-colors cursor-default border-b border-zinc-800/40 last:border-0">
       <span className={cn("mt-1.5 w-1.5 h-1.5 rounded-full shrink-0", dot)} aria-hidden />
       <div className="flex-1 min-w-0">
         <p className="text-xs text-zinc-300 leading-relaxed">{message}</p>
-        <p className="text-xs text-zinc-600 mt-0.5">{time}</p>
+        <p className="text-[11px] text-zinc-600 mt-0.5">{relativeTime(time)}</p>
       </div>
     </div>
   );

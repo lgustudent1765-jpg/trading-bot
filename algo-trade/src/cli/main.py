@@ -59,6 +59,13 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     position_store  = PositionStore()
     notifier        = Notifier(config)
 
+    # Load UI-saved config overrides from DB (Railway-safe persistence)
+    db_overrides = position_store.get_config_overrides()
+    if db_overrides:
+        from src.config import update_config as _update_cfg
+        _update_cfg(db_overrides)
+        log.info("loaded config overrides from database")
+
     # Re-register positions that survived a restart.
     for sym in position_store.symbols():
         risk_manager.register_open(sym)

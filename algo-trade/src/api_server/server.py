@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from aiohttp import web
 
-from src.config import get_config, update_config
+from src.config import get_config, update_config, deep_merge
 from src.logger import get_logger
 from src.market_hours import is_market_open, now_et
 
@@ -214,7 +214,10 @@ def create_app(
         return ("*" * 8) if value else ""
 
     async def get_config_endpoint(request: web.Request) -> web.Response:
-        cfg = get_config()
+        # Merge DB overrides (Railway-safe) on top of base config
+        base = get_config()
+        db_overrides = position_store.get_config_overrides() if position_store else {}
+        cfg = deep_merge(base, db_overrides) if db_overrides else base
         broker = cfg.get("broker", {})
         wb = broker.get("webull", {})
         screener = cfg.get("screener", {})
@@ -244,7 +247,10 @@ def create_app(
             "notify_email_recipient": email.get("recipient", ""),
             "notify_webhook_enabled": webhook.get("enabled", False),
             "notify_webhook_url": webhook.get("url", ""),
-            "webull_device_id": _mask(wb.get("device_id", "")),
+            "webull_device_id":     _mask(wb.get("device_id", "")),
+            "webull_access_token":  _mask(wb.get("access_token", "")),
+            "webull_refresh_token": _mask(wb.get("refresh_token", "")),
+            "webull_trade_token":   _mask(wb.get("trade_token", "")),
             "webull_account_id_set": bool(wb.get("account_id", "")),
         })
 
@@ -351,8 +357,79 @@ def create_app(
         if not updates:
             return web.json_response({"error": "no recognised fields"}, status=400)
 
+        # 1. Persist to DB (survives Railway redeployments)
+        if position_store:
+            position_store.merge_config_overrides(updates)
+
+        # 2. Apply to in-memory config immediately (no restart needed)
         update_config(updates)
         return web.json_response({"ok": True})
+
+    # ── Test email endpoint ────────────────────────────────────────────────
+
+    async def test_email_endpoint(request: web.Request) -> web.Response:
+        """Send a test email using the current SMTP configuration."""
+        import smtplib
+        import ssl as _ssl
+        from email.mime.text import MIMEText as _MIMEText
+
+        base = get_config()
+        db_overrides = position_store.get_config_overrides() if position_store else {}
+        cfg   = deep_merge(base, db_overrides) if db_overrides else base
+        email = cfg.get("notifications", {}).get("email", {})
+
+        if not email.get("enabled", False):
+            return web.json_response({"error": "Email alerts are disabled — enable them first."}, status=400)
+
+        user     = os.getenv("NOTIFY_EMAIL_USER", email.get("username", ""))
+        password = os.getenv("NOTIFY_EMAIL_PASS", email.get("password", ""))
+        recipient = email.get("recipient", "") or user
+        smtp_host = email.get("smtp_host", "smtp.gmail.com")
+        smtp_port = int(email.get("smtp_port", 587))
+
+        if not user:
+            return web.json_response({"error": "Sender email is not configured."}, status=400)
+        if not password:
+            return web.json_response({"error": "App password is not configured."}, status=400)
+
+        try:
+            msg = _MIMEText(
+                "This is a test message from AlgoTrade.\n\n"
+                f"SMTP host : {smtp_host}\n"
+                f"SMTP port : {smtp_port}\n"
+                f"Sender    : {user}\n"
+                f"Recipient : {recipient}\n\n"
+                "Your email notification configuration is working correctly."
+            )
+            msg["Subject"] = "[AlgoTrade] Test Email"
+            msg["From"]    = user
+            msg["To"]      = recipient
+
+            context = _ssl.create_default_context()
+            loop = asyncio.get_event_loop()
+
+            def _send():
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as srv:
+                    srv.starttls(context=context)
+                    srv.login(user, password)
+                    srv.sendmail(user, recipient, msg.as_string())
+
+            await loop.run_in_executor(None, _send)
+            log.info("test email sent", recipient=recipient)
+            return web.json_response({"ok": True, "recipient": recipient})
+        except smtplib.SMTPAuthenticationError:
+            return web.json_response(
+                {"error": "Authentication failed. Check your app password (Gmail requires a dedicated App Password, not your account password)."},
+                status=500,
+            )
+        except smtplib.SMTPConnectError:
+            return web.json_response(
+                {"error": f"Cannot connect to {smtp_host}:{smtp_port}. Check host/port settings."},
+                status=500,
+            )
+        except Exception as exc:
+            log.error("test email failed", error=str(exc))
+            return web.json_response({"error": str(exc)}, status=500)
 
     # ── Market data endpoints ──────────────────────────────────────────────
 
@@ -492,8 +569,9 @@ def create_app(
     app.router.add_get("/quote/{symbol}",   get_quote)
     app.router.add_get("/strategies",       get_strategies)
     app.router.add_post("/backtest/run",    run_backtest_endpoint)
-    app.router.add_get("/config",           get_config_endpoint)
-    app.router.add_post("/config",          post_config_endpoint)
+    app.router.add_get("/config",                get_config_endpoint)
+    app.router.add_post("/config",               post_config_endpoint)
+    app.router.add_post("/config/test-email",    test_email_endpoint)
     app.router.add_get("/",                 dashboard)
     return app
 

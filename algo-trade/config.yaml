@@ -1,74 +1,63 @@
-# file: config.yaml.template
-# Production configuration template. Copy to config.yaml.
-# Secrets must go in .env — never here.
-
-mode: paper # paper | manual | automated
-
-screener:
-  top_n: 10
-  poll_interval_seconds: 60
-  provider: yahoo # yahoo | fmp | mock
-  market_hours_only: true # only run 9:30–4:00 ET, Mon–Fri
-
-options_filter:
-  min_volume: 100
-  min_open_interest: 500
-  max_spread_pct: 0.10
-  max_dte: 30
-  min_dte: 1
-  max_otm_pct: 0.15
-
+api_server:
+  host: 0.0.0.0
+  port: 8181
+broker:
+  name: mock
+  webull:
+    access_token: ''
+    account_id: ''
+    device_id: ''
+    refresh_token: ''
+    trade_token: ''
+database:
+  url: sqlite:///data/algo_trade.db
 indicators:
-  rsi_period: 14
-  rsi_overbought: 70
-  rsi_oversold: 30
-  macd_fast: 12
-  macd_slow: 26
-  macd_signal: 9
   atr_period: 14
   lookback_bars: 50
-  signal_cooldown_minutes: 30 # min wait before re-signalling same ticker
-
+  macd_fast: 12
+  macd_signal: 9
+  macd_slow: 26
+  rsi_overbought: 70
+  rsi_oversold: 30
+  rsi_period: 14
+  signal_cooldown_minutes: 30
+logging:
+  json_format: true
+  level: INFO
+  log_file: logs/algo-trade.log
+market_data:
+  base_url: https://financialmodelingprep.com/api/v3
+  fmp_api_key: ''
+  request_timeout: 10
+  retry_backoff: 2.0
+  retry_max: 3
+mode: paper
+notifications:
+  email:
+    enabled: true
+    password: testpass
+    recipient: recv@gmail.com
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    username: test@gmail.com
+  webhook:
+    enabled: false
+    url: ''
+options_filter:
+  max_dte: 30
+  max_otm_pct: 0.15
+  max_spread_pct: 0.1
+  min_dte: 1
+  min_open_interest: 500
+  min_volume: 100
 risk:
-  max_position_pct: 0.05 # max % of equity per trade
   max_open_positions: 5
+  max_position_pct: 0.05
   pdt_equity_threshold: 25000
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 3.0
-
-broker:
-  name: mock # mock | webull
-  webull:
-    device_id: "" # set via WEBULL_DEVICE_ID in .env
-    access_token: ""
-    refresh_token: ""
-    trade_token: ""
-    account_id: ""
-
-market_data:
-  fmp_api_key: "" # set via FMP_API_KEY in .env
-  base_url: "https://financialmodelingprep.com/api/v3"
-  request_timeout: 10
-  retry_max: 3
-  retry_backoff: 2.0
-
-logging:
-  level: INFO
-  json_format: true
-  log_file: logs/algo-trade.log # rotates at 10 MB, keeps 5 backups
-
-api_server:
-  host: "0.0.0.0"
-  port: 8181
-
-notifications:
-  email:
-    enabled: false # set to true and configure .env to enable
-    smtp_host: smtp.gmail.com
-    smtp_port: 465
-    username: "daku17665@gmail.com" # set via NOTIFY_EMAIL_USER in .env
-    password: "aedd auct mxce ddmn" # set via NOTIFY_EMAIL_PASS in .env
-    recipient: "" # defaults to username if blank
-  webhook:
-    enabled: false
-    url: "" # set via NOTIFY_WEBHOOK_URL in .env
+screener:
+  market_hours_only: true
+  poll_interval_seconds: 60
+  provider: yahoo
+  top_n: 10
