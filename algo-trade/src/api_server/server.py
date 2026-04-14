@@ -217,7 +217,7 @@ def create_app(
         # Merge DB overrides (Railway-safe) on top of base config
         base = get_config()
         db_overrides = position_store.get_config_overrides() if position_store else {}
-        cfg = deep_merge(base, db_overrides) if db_overrides else base
+        cfg = deep_merge(base, db_overrides) if db_overrides is not None else base
         broker = cfg.get("broker", {})
         wb = broker.get("webull", {})
         screener = cfg.get("screener", {})
@@ -375,7 +375,7 @@ def create_app(
 
         base = get_config()
         db_overrides = position_store.get_config_overrides() if position_store else {}
-        cfg   = deep_merge(base, db_overrides) if db_overrides else base
+        cfg   = deep_merge(base, db_overrides) if db_overrides is not None else base
         email = cfg.get("notifications", {}).get("email", {})
 
         if not email.get("enabled", False):

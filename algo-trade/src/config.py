@@ -20,6 +20,7 @@ import yaml
 _CONFIG: Optional[Dict[str, Any]] = None
 _CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 _DOTENV_PATH = Path(os.getenv("DOTENV_PATH", ".env"))
+_LOADED_PATH: Optional[Path] = None  # tracks the actual path used by load_config
 
 
 def _load_dotenv(path: Path) -> None:
@@ -86,12 +87,13 @@ def _apply_env_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> Dict[str, Any]:
     """Load configuration from YAML + .env + environment variables."""
-    global _CONFIG
+    global _CONFIG, _LOADED_PATH
 
     # Load .env first so its values are available when building defaults.
     _load_dotenv(dotenv or _DOTENV_PATH)
 
     config_path = path or _CONFIG_PATH
+    _LOADED_PATH = config_path  # remember for update_config writes
     if config_path.exists():
         with config_path.open() as fh:
             raw = yaml.safe_load(fh) or {}
@@ -201,11 +203,12 @@ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
         _CONFIG = load_config()
     _CONFIG = deep_merge(_CONFIG, updates)
     # Persist to disk so settings survive restarts
+    write_path = _LOADED_PATH or _CONFIG_PATH
     try:
-        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _CONFIG_PATH.open("w") as fh:
+        write_path.parent.mkdir(parents=True, exist_ok=True)
+        with write_path.open("w") as fh:
             yaml.dump(_CONFIG, fh, default_flow_style=False, allow_unicode=True)
     except Exception as exc:
         import logging as _logging
-        _logging.getLogger(__name__).warning("Failed to persist config to %s: %s", _CONFIG_PATH, exc)
+        _logging.getLogger(__name__).warning("Failed to persist config to %s: %s", write_path, exc)
     return _CONFIG
