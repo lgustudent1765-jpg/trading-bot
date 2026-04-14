@@ -35,6 +35,7 @@ from src.strategy_engine import StrategyEngine
 log = get_logger(__name__)
 
 _signal_store: List[Dict] = []
+_action_store: List[Dict] = []
 
 
 def _attach_shutdown(loop: asyncio.AbstractEventLoop, tasks: list) -> None:
@@ -78,6 +79,22 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     if existing_signals:
         log.info("restored signal history from database", count=len(existing_signals))
 
+    # Restore recent activity from DB
+    existing_actions = position_store.get_actions(limit=200)
+    _action_store.extend(existing_actions)
+    if existing_actions:
+        log.info("restored action history from database", count=len(existing_actions))
+
+    # Log system startup as an action
+    position_store.add_action("SYSTEM_STARTED", None, f"Pipeline started in {mode} mode", {"mode": mode})
+    from datetime import datetime, timezone as _tz
+    _action_store.append({
+        "event": "SYSTEM_STARTED", "symbol": None,
+        "detail": f"Pipeline started in {mode} mode",
+        "data": {"mode": mode},
+        "ts": datetime.now(_tz.utc).isoformat(),
+    })
+
     candidate_queue: asyncio.Queue = asyncio.Queue(maxsize=20)
     chain_queue:     asyncio.Queue = asyncio.Queue(maxsize=50)
     signal_queue:    asyncio.Queue = asyncio.Queue(maxsize=20)
@@ -91,6 +108,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     order_mgr  = OrderManager(
         broker_adapter, risk_manager, signal_queue, mode, config,
         position_store=position_store, notifier=notifier,
+        action_store=_action_store,
     )
 
     # Signal tap: copy signals to the API signal_store.
@@ -122,7 +140,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             await signal_queue.put(sig)  # pass on to order manager
 
     api_cfg = config.get("api_server", {})
-    app = create_app(risk_manager, _signal_store, position_store, market_adapter)
+    app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store)
 
     log.info("pipeline starting", mode=mode)
 

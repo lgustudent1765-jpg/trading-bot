@@ -34,6 +34,8 @@ class OrderManager:
         position_store=None,
         notifier=None,
         signal_store: Optional[list] = None,
+        action_store: Optional[list] = None,
+        **kwargs: Any,
     ) -> None:
         self._broker = broker
         self._risk = risk_manager
@@ -43,7 +45,20 @@ class OrderManager:
         self._position_store = position_store
         self._notifier = notifier
         self._signal_store = signal_store
+        self._action_store = action_store
         self._open_orders: Dict[str, SignalEvent] = {}
+
+    def _record_action(self, event: str, symbol: Optional[str], detail: str, data: dict) -> None:
+        """Append to in-memory action_store and persist to DB."""
+        from datetime import datetime, timezone
+        entry = {"event": event, "symbol": symbol, "detail": detail, "data": data,
+                 "ts": datetime.now(timezone.utc).isoformat()}
+        if self._action_store is not None:
+            self._action_store.append(entry)
+            if len(self._action_store) > 200:
+                self._action_store.pop(0)
+        if self._position_store:
+            self._position_store.add_action(event=event, symbol=symbol, detail=detail, data=data)
 
     async def _handle_signal(self, signal: SignalEvent) -> None:
         plan = signal.trade_plan
@@ -51,6 +66,11 @@ class OrderManager:
         equity = await self._broker.get_account_equity()
         if not self._risk.approve(plan, equity):
             log.info("signal rejected by risk manager", symbol=plan.symbol)
+            self._record_action(
+                "SIGNAL_REJECTED", plan.symbol,
+                f"{plan.direction.value} signal rejected by risk manager",
+                {"direction": plan.direction.value, "entry": plan.entry_limit},
+            )
             return
 
         if self._mode == "manual":
@@ -86,6 +106,12 @@ class OrderManager:
 
         if order.status == OrderStatus.FILLED:
             self._risk.register_open(option_symbol)
+            self._record_action(
+                "ORDER_FILLED", plan.symbol,
+                f"BUY {order.filled_qty}x {option_symbol} @ ${order.avg_fill_price:.2f}",
+                {"option_symbol": option_symbol, "qty": order.filled_qty,
+                 "fill_price": order.avg_fill_price, "order_id": order.order_id},
+            )
 
             # Persist position.
             if self._position_store:
@@ -174,6 +200,15 @@ class OrderManager:
                     )
                     pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
                     self._risk.register_close(option_symbol)
+                    pnl_sign = "+" if pnl >= 0 else ""
+                    self._record_action(
+                        "POSITION_CLOSED", plan.symbol,
+                        f"{exit_reason}: SELL {option_symbol} @ ${exit_order.avg_fill_price:.2f} "
+                        f"(P&L: {pnl_sign}${pnl:.2f})",
+                        {"option_symbol": option_symbol, "reason": exit_reason,
+                         "entry": entry_fill, "exit": exit_order.avg_fill_price,
+                         "pnl": round(pnl, 2)},
+                    )
 
                     if self._position_store:
                         self._position_store.remove_position(option_symbol)

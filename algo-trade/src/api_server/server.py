@@ -61,7 +61,9 @@ def create_app(
     signal_store: List[Dict],
     position_store: Optional[Any] = None,
     market_adapter: Optional[Any] = None,
+    action_store: Optional[List[Dict]] = None,
 ) -> web.Application:
+    _action_store: List[Dict] = action_store if action_store is not None else []
 
     async def health(request: web.Request) -> web.Response:
         cfg = get_config()
@@ -110,6 +112,10 @@ def create_app(
             "market_open": is_market_open(),
         })
 
+    async def get_history(request: web.Request) -> web.Response:
+        limit = int(request.rel_url.query.get("limit", 50))
+        return web.json_response(list(reversed(_action_store[-limit:])))
+
     async def dashboard(request: web.Request) -> web.Response:
         open_count = position_store.open_count if position_store else 0
         market_status = "OPEN" if is_market_open() else "CLOSED"
@@ -142,6 +148,41 @@ def create_app(
 </div>"""
         else:
             signals_html = '<div class="card"><b>Recent Signals</b><p style="color:#555;margin:8px 0 0">No signals yet.</p></div>'
+
+        # Build activity log rows
+        recent_actions = list(reversed(_action_store[-30:])) if _action_store else []
+        _EVENT_COLORS = {
+            "ORDER_FILLED":     "#00ff00",
+            "POSITION_CLOSED":  "#ffaa00",
+            "SIGNAL_REJECTED":  "#ff4444",
+            "SYSTEM_STARTED":   "#00aaff",
+            "SYSTEM_STOPPED":   "#888888",
+        }
+        if recent_actions:
+            action_rows = ""
+            for a in recent_actions:
+                ev = str(a.get("event", ""))
+                color = _EVENT_COLORS.get(ev, "#aaaaaa")
+                sym = a.get("symbol") or "—"
+                ts  = str(a.get("ts", "—"))[:19].replace("T", " ")
+                action_rows += (
+                    f"<tr>"
+                    f"<td style='color:#555'>{ts}</td>"
+                    f"<td style='color:{color};font-weight:bold'>{ev}</td>"
+                    f"<td><b>{sym}</b></td>"
+                    f"<td style='color:#ccc'>{a.get('detail', '—')}</td>"
+                    f"</tr>"
+                )
+            activity_html = f"""
+<div class="card">
+  <b>Activity Log</b> <span style="color:#555;font-size:0.8em">(last {len(recent_actions)} events)</span>
+  <table style="margin-top:10px">
+    <thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Detail</th></tr></thead>
+    <tbody>{action_rows}</tbody>
+  </table>
+</div>"""
+        else:
+            activity_html = '<div class="card"><b>Activity Log</b><p style="color:#555;margin:8px 0 0">No activity yet.</p></div>'
 
         # Build positions table rows
         positions = position_store.get_positions() if position_store else {}
@@ -200,12 +241,14 @@ def create_app(
 </div>
 {signals_html}
 {positions_html}
+{activity_html}
 <div class="card">
   <b>API Endpoints:</b> &nbsp;
   <a href="/health">/health</a> &nbsp;
   <a href="/signals">/signals</a> &nbsp;
   <a href="/positions">/positions</a> &nbsp;
-  <a href="/metrics">/metrics</a>
+  <a href="/metrics">/metrics</a> &nbsp;
+  <a href="/history">/history</a>
 </div>
 <p style="color:#555;font-size:0.8em">Auto-refreshes every 30 seconds.</p>
 </body></html>"""
@@ -649,6 +692,7 @@ def create_app(
     app.router.add_get("/signals",          get_signals)
     app.router.add_get("/positions",        get_positions)
     app.router.add_get("/metrics",          get_metrics)
+    app.router.add_get("/history",          get_history)
     app.router.add_get("/overview",         get_overview)
     app.router.add_get("/quote/{symbol}",   get_quote)
     app.router.add_get("/strategies",       get_strategies)

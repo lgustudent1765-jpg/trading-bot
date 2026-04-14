@@ -57,6 +57,18 @@ class SignalRecord(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class ActionRecord(Base):
+    """Stores program activity events (fills, closes, rejections, system events)."""
+    __tablename__ = "actions"
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    event      = Column(String, nullable=False)   # e.g. ORDER_FILLED, POSITION_CLOSED
+    symbol     = Column(String)
+    detail     = Column(String)                   # human-readable summary
+    data_json  = Column(Text, default="{}")       # extra structured data
+    timestamp  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class ConfigOverrideRecord(Base):
     """Stores UI-driven config overrides so they survive Railway redeployments."""
     __tablename__ = "config_overrides"
@@ -237,6 +249,47 @@ class PositionStore:
                     "ts": r.timestamp.isoformat() if r.timestamp else None,
                 }
                 for r in reversed(records) # return in chronological order
+            ]
+
+    # ------------------------------------------------------------------ #
+    # Activity history                                                     #
+    # ------------------------------------------------------------------ #
+
+    def add_action(
+        self,
+        event: str,
+        symbol: Optional[str] = None,
+        detail: str = "",
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        with self.SessionLocal() as session:
+            rec = ActionRecord(
+                event=event,
+                symbol=symbol,
+                detail=detail,
+                data_json=json.dumps(data or {}, default=str),
+                timestamp=datetime.now(timezone.utc),
+            )
+            session.add(rec)
+            session.commit()
+
+    def get_actions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.SessionLocal() as session:
+            records = (
+                session.query(ActionRecord)
+                .order_by(ActionRecord.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "event":  r.event,
+                    "symbol": r.symbol,
+                    "detail": r.detail,
+                    "data":   json.loads(r.data_json or "{}"),
+                    "ts":     r.timestamp.isoformat() if r.timestamp else None,
+                }
+                for r in reversed(records)
             ]
 
     # ------------------------------------------------------------------ #
