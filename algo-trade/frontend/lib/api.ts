@@ -110,6 +110,7 @@ export const api = {
     body: JSON.stringify(req),
   }).then((r) => r.json() as Promise<BacktestResponse>),
   history:      (limit = 50)              => fetchJSON<Action[]>(`/history?limit=${limit}`),
+  status:       ()                        => fetchJSON<StatusResponse>("/status"),
   getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
   updateConfig: (payload: ConfigPayload)  => fetch(`${API_BASE}/config`, {
     method: "POST",
@@ -178,6 +179,31 @@ export interface BacktestResponse {
   symbol: string;
   period: string;
   error?: string;
+}
+
+export interface StatusResponse {
+  // system
+  uptime_s: number;
+  market_open: boolean;
+  market_time_et: string;
+  mode: string;
+  broker: string;
+  database_connected: boolean;
+  // live counts
+  open_positions: number;
+  signal_count: number;
+  action_count: number;
+  // p&l
+  total_pnl: number;
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number;
+  avg_pnl: number;
+  best_trade: number;
+  worst_trade: number;
+  // recent activity
+  recent_actions: Action[];
 }
 
 export type ActionEvent =

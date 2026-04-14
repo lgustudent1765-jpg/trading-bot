@@ -273,6 +273,34 @@ class PositionStore:
             session.add(rec)
             session.commit()
 
+    def get_pnl_summary(self) -> Dict[str, Any]:
+        """Aggregate P&L from all POSITION_CLOSED action records."""
+        with self.SessionLocal() as session:
+            records = (
+                session.query(ActionRecord)
+                .filter(ActionRecord.event == "POSITION_CLOSED")
+                .all()
+            )
+        pnls: List[float] = []
+        for r in records:
+            data = json.loads(r.data_json or "{}")
+            pnl = data.get("pnl")
+            if pnl is not None:
+                pnls.append(float(pnl))
+        wins   = [p for p in pnls if p >= 0]
+        losses = [p for p in pnls if p < 0]
+        total  = sum(pnls)
+        return {
+            "total_pnl":    round(total, 2),
+            "trade_count":  len(pnls),
+            "win_count":    len(wins),
+            "loss_count":   len(losses),
+            "win_rate":     round(len(wins) / len(pnls), 3) if pnls else 0.0,
+            "avg_pnl":      round(total / len(pnls), 2) if pnls else 0.0,
+            "best_trade":   round(max(pnls), 2) if pnls else 0.0,
+            "worst_trade":  round(min(pnls), 2) if pnls else 0.0,
+        }
+
     def get_actions(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.SessionLocal() as session:
             records = (

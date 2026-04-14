@@ -116,6 +116,32 @@ def create_app(
         limit = int(request.rel_url.query.get("limit", 50))
         return web.json_response(list(reversed(_action_store[-limit:])))
 
+    async def get_status(request: web.Request) -> web.Response:
+        cfg        = get_config()
+        open_count = position_store.open_count if position_store else 0
+        db_ok      = position_store.check_connection() if position_store else False
+        pnl        = position_store.get_pnl_summary() if position_store else {
+            "total_pnl": 0.0, "trade_count": 0, "win_count": 0, "loss_count": 0,
+            "win_rate": 0.0, "avg_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
+        }
+        return web.json_response({
+            # system
+            "uptime_s":          round(time.time() - _START_TIME, 1),
+            "market_open":       is_market_open(),
+            "market_time_et":    now_et().strftime("%Y-%m-%d %H:%M:%S ET"),
+            "mode":              cfg.get("mode", "paper"),
+            "broker":            cfg.get("broker", {}).get("name", "mock"),
+            "database_connected": db_ok,
+            # live counts
+            "open_positions":    open_count,
+            "signal_count":      len(signal_store),
+            "action_count":      len(_action_store),
+            # p&l
+            **pnl,
+            # recent activity (newest first)
+            "recent_actions":    list(reversed(_action_store[-30:])),
+        })
+
     async def dashboard(request: web.Request) -> web.Response:
         open_count = position_store.open_count if position_store else 0
         market_status = "OPEN" if is_market_open() else "CLOSED"
@@ -693,6 +719,7 @@ def create_app(
     app.router.add_get("/positions",        get_positions)
     app.router.add_get("/metrics",          get_metrics)
     app.router.add_get("/history",          get_history)
+    app.router.add_get("/status",           get_status)
     app.router.add_get("/overview",         get_overview)
     app.router.add_get("/quote/{symbol}",   get_quote)
     app.router.add_get("/strategies",       get_strategies)
