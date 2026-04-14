@@ -35,9 +35,10 @@ _MASK_SENTINEL = "********"
 
 # C-2: validation allowlists / ranges
 _ENUM_FIELDS: Dict[str, set] = {
-    "mode":              {"paper", "manual", "automated"},
-    "broker_name":       {"mock", "webull"},
-    "screener_provider": {"yahoo", "fmp", "mock"},
+    "mode":                  {"paper", "manual", "automated"},
+    "broker_name":           {"mock", "webull"},
+    "screener_provider":     {"yahoo", "fmp", "mock"},
+    "notify_email_provider": {"smtp", "brevo", "sendgrid", "resend"},
 }
 _POSITIVE_INT_FIELDS = {
     "screener_poll_interval_seconds",
@@ -241,6 +242,8 @@ def create_app(
             "risk_stop_loss_atr_mult": risk.get("stop_loss_atr_mult", 1.5),
             "risk_take_profit_atr_mult": risk.get("take_profit_atr_mult", 3.0),
             "notify_email_enabled": email.get("enabled", False),
+            "notify_email_provider": email.get("provider", "smtp"),
+            "notify_email_api_key_set": bool(os.getenv("NOTIFY_EMAIL_API_KEY") or email.get("api_key", "")),
             "notify_email_smtp_host": email.get("smtp_host", "smtp.gmail.com"),
             "notify_email_smtp_port": int(email.get("smtp_port", 587)),
             "notify_email_username": email.get("username", ""),
@@ -333,6 +336,8 @@ def create_app(
             "risk_stop_loss_atr_mult":      ["risk", "stop_loss_atr_mult"],
             "risk_take_profit_atr_mult":    ["risk", "take_profit_atr_mult"],
             "notify_email_enabled":         ["notifications", "email", "enabled"],
+            "notify_email_provider":        ["notifications", "email", "provider"],
+            "notify_email_api_key":         ["notifications", "email", "api_key"],
             "notify_email_smtp_host":       ["notifications", "email", "smtp_host"],
             "notify_email_smtp_port":       ["notifications", "email", "smtp_port"],
             "notify_email_username":        ["notifications", "email", "username"],
@@ -369,9 +374,11 @@ def create_app(
     # ── Test email endpoint ────────────────────────────────────────────────
 
     async def test_email_endpoint(request: web.Request) -> web.Response:
-        """Send a test email using the current SMTP configuration."""
+        """Send a test email using the current email configuration."""
         import smtplib
         import ssl as _ssl
+        import json as _json
+        import urllib.request as _urlreq
         from email.mime.text import MIMEText as _MIMEText
 
         base = get_config()
@@ -382,32 +389,91 @@ def create_app(
         if not email.get("enabled", False):
             return web.json_response({"error": "Email alerts are disabled — enable them first."}, status=400)
 
-        user     = os.getenv("NOTIFY_EMAIL_USER") or email.get("username", "")
-        password = os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", "")
+        provider  = os.getenv("NOTIFY_EMAIL_PROVIDER") or email.get("provider", "smtp")
+        api_key   = os.getenv("NOTIFY_EMAIL_API_KEY") or email.get("api_key", "")
+        user      = os.getenv("NOTIFY_EMAIL_USER") or email.get("username", "")
+        password  = os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", "")
         recipient = email.get("recipient", "") or user
         smtp_host = email.get("smtp_host", "smtp.gmail.com")
         smtp_port = int(email.get("smtp_port", 587))
 
         if not user:
             return web.json_response({"error": "Sender email is not configured."}, status=400)
+        if not recipient:
+            return web.json_response({"error": "Recipient email is not configured."}, status=400)
+
+        body_text = (
+            "This is a test message from AlgoTrade.\n\n"
+            f"Provider  : {provider}\n"
+            f"Sender    : {user}\n"
+            f"Recipient : {recipient}\n\n"
+            "Your email notification configuration is working correctly."
+        )
+
+        # ── HTTP API providers (not blocked by Railway) ────────────────────
+        if provider in ("brevo", "sendgrid", "resend"):
+            if not api_key:
+                return web.json_response(
+                    {"error": f"API key not set. Add NOTIFY_EMAIL_API_KEY env var or set it in Settings."},
+                    status=400,
+                )
+
+            if provider == "brevo":
+                url     = "https://api.brevo.com/v3/smtp/email"
+                headers = {"api-key": api_key, "Content-Type": "application/json"}
+                payload = {
+                    "sender":      {"email": user},
+                    "to":          [{"email": recipient}],
+                    "subject":     "[AlgoTrade] Test Email",
+                    "textContent": body_text,
+                }
+            elif provider == "sendgrid":
+                url     = "https://api.sendgrid.com/v3/mail/send"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "personalizations": [{"to": [{"email": recipient}]}],
+                    "from":    {"email": user},
+                    "subject": "[AlgoTrade] Test Email",
+                    "content": [{"type": "text/plain", "value": body_text}],
+                }
+            else:  # resend
+                url     = "https://api.resend.com/emails"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {"from": user, "to": [recipient], "subject": "[AlgoTrade] Test Email", "text": body_text}
+
+            try:
+                loop = asyncio.get_event_loop()
+
+                def _http_send():
+                    data = _json.dumps(payload).encode()
+                    req  = _urlreq.Request(url, data=data, headers=headers, method="POST")
+                    with _urlreq.urlopen(req, timeout=15) as resp:
+                        return resp.getcode(), resp.read().decode()
+
+                status_code, resp_body = await loop.run_in_executor(None, _http_send)
+                if status_code not in (200, 201, 202):
+                    return web.json_response(
+                        {"error": f"{provider} API returned {status_code}: {resp_body}"},
+                        status=500,
+                    )
+                log.info("test email sent via api", provider=provider, recipient=recipient)
+                return web.json_response({"ok": True, "recipient": recipient, "provider": provider})
+            except Exception as exc:
+                log.error("test email api failed", provider=provider, error=str(exc))
+                return web.json_response({"error": str(exc)}, status=500)
+
+        # ── SMTP path ──────────────────────────────────────────────────────
         if not password:
             return web.json_response({"error": "App password is not configured."}, status=400)
 
         try:
-            msg = _MIMEText(
-                "This is a test message from AlgoTrade.\n\n"
-                f"SMTP host : {smtp_host}\n"
-                f"SMTP port : {smtp_port}\n"
-                f"Sender    : {user}\n"
-                f"Recipient : {recipient}\n\n"
-                "Your email notification configuration is working correctly."
-            )
+            msg = _MIMEText(body_text)
             msg["Subject"] = "[AlgoTrade] Test Email"
             msg["From"]    = user
             msg["To"]      = recipient
 
             context = _ssl.create_default_context()
-            loop = asyncio.get_event_loop()
+            loop    = asyncio.get_event_loop()
 
             def _send():
                 if smtp_port == 465:
@@ -422,7 +488,7 @@ def create_app(
 
             await loop.run_in_executor(None, _send)
             log.info("test email sent", recipient=recipient)
-            return web.json_response({"ok": True, "recipient": recipient})
+            return web.json_response({"ok": True, "recipient": recipient, "provider": "smtp"})
         except smtplib.SMTPAuthenticationError:
             return web.json_response(
                 {"error": "Authentication failed. Check your app password (Gmail requires a dedicated App Password, not your account password)."},
@@ -438,11 +504,8 @@ def create_app(
                 log.error("test email failed — SMTP blocked by platform", error=str(exc))
                 return web.json_response(
                     {"error": (
-                        f"Cannot reach {smtp_host}:{smtp_port} — your hosting platform (Railway) "
-                        "blocks outbound SMTP ports. "
-                        "Workaround: enable the Discord/Slack webhook channel in Settings instead, "
-                        "or use an HTTP-based mail API (e.g. SendGrid, Mailgun) and set the SMTP relay "
-                        "host they provide (usually port 587 on their own domain)."
+                        "Railway blocks outbound SMTP. "
+                        "Switch Email Provider to 'brevo' in Settings and add your Brevo API key."
                     )},
                     status=500,
                 )

@@ -166,6 +166,8 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
         "notifications": {
             "email": {
                 "enabled":   False,
+                "provider":  os.getenv("NOTIFY_EMAIL_PROVIDER", "smtp"),  # smtp | brevo | sendgrid | resend
+                "api_key":   os.getenv("NOTIFY_EMAIL_API_KEY", ""),
                 "smtp_host": "smtp.gmail.com",
                 "smtp_port": 587,
                 "username":  os.getenv("NOTIFY_EMAIL_USER") or "",

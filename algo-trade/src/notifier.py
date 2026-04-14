@@ -54,6 +54,8 @@ class Notifier:
         email = notif.get("email", {})
         return {
             "enabled":   email.get("enabled", False),
+            "provider":  os.getenv("NOTIFY_EMAIL_PROVIDER") or email.get("provider", "smtp"),
+            "api_key":   os.getenv("NOTIFY_EMAIL_API_KEY") or email.get("api_key", ""),
             "smtp_host": email.get("smtp_host", "smtp.gmail.com"),
             "smtp_port": int(email.get("smtp_port", 587)),
             "user":      os.getenv("NOTIFY_EMAIL_USER") or email.get("username", ""),
@@ -74,6 +76,57 @@ class Notifier:
     def _send_email_sync(self, subject: str, body: str) -> None:
         """Synchronous email send — called from thread executor."""
         ec = self._get_email_cfg()
+        provider = ec["provider"]
+
+        if provider in ("brevo", "sendgrid", "resend"):
+            # HTTP API send — not blocked by Railway
+            import urllib.request
+            import json as _json
+
+            if not ec["api_key"]:
+                log.warning("email api_key not configured — set NOTIFY_EMAIL_API_KEY")
+                return
+            if not ec["user"] or not ec["to"]:
+                log.warning("email sender/recipient not configured")
+                return
+
+            if provider == "brevo":
+                url = "https://api.brevo.com/v3/smtp/email"
+                headers = {"api-key": ec["api_key"], "Content-Type": "application/json"}
+                payload = {
+                    "sender":      {"email": ec["user"]},
+                    "to":          [{"email": ec["to"]}],
+                    "subject":     subject,
+                    "textContent": body,
+                }
+            elif provider == "sendgrid":
+                url = "https://api.sendgrid.com/v3/mail/send"
+                headers = {"Authorization": f"Bearer {ec['api_key']}", "Content-Type": "application/json"}
+                payload = {
+                    "personalizations": [{"to": [{"email": ec["to"]}]}],
+                    "from":    {"email": ec["user"]},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}],
+                }
+            else:  # resend
+                url = "https://api.resend.com/emails"
+                headers = {"Authorization": f"Bearer {ec['api_key']}", "Content-Type": "application/json"}
+                payload = {"from": ec["user"], "to": [ec["to"]], "subject": subject, "text": body}
+
+            try:
+                data = _json.dumps(payload).encode()
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    status = resp.getcode()
+                if status not in (200, 201, 202):
+                    log.error("email api returned unexpected status", status=status)
+                    return
+                log.info("email alert sent via api", provider=provider, subject=subject)
+            except Exception as exc:
+                log.error("email api send failed", provider=provider, error=str(exc))
+            return
+
+        # ── SMTP path ──────────────────────────────────────────────────────
         if not ec["user"] or not ec["password"]:
             log.warning("email not configured — set NOTIFY_EMAIL_USER and NOTIFY_EMAIL_PASS")
             return
@@ -85,12 +138,10 @@ class Notifier:
 
             context = ssl.create_default_context()
             if ec["smtp_port"] == 465:
-                # Direct TLS (SMTP_SSL)
                 with smtplib.SMTP_SSL(ec["smtp_host"], ec["smtp_port"], context=context) as server:
                     server.login(ec["user"], ec["password"])
                     server.sendmail(ec["user"], ec["to"], msg.as_string())
             else:
-                # STARTTLS (port 587 or custom)
                 with smtplib.SMTP(ec["smtp_host"], ec["smtp_port"]) as server:
                     server.starttls(context=context)
                     server.login(ec["user"], ec["password"])
@@ -100,7 +151,7 @@ class Notifier:
             if getattr(exc, "errno", None) in (101, 111, 110):
                 log.error(
                     "email send failed — SMTP port blocked by hosting platform. "
-                    "Use the webhook channel (Discord/Slack) instead.",
+                    "Switch provider to 'brevo' or 'sendgrid' in Settings.",
                     error=str(exc),
                 )
             else:
