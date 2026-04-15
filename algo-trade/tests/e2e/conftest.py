@@ -119,22 +119,15 @@ def seed_signals() -> List[Dict[str, Any]]:
 
 @pytest.fixture
 def position_store(tmp_path):
-    """PositionStore writing to a temp directory — isolated per test."""
+    """PositionStore using isolated temp SQLite — clean slate per test."""
     import src.persistence as pm
 
-    state_file = tmp_path / "positions.json"
+    db_url = f"sqlite:///{tmp_path}/test.db"
 
-    with (
-        patch.object(pm, "_DATA_DIR", tmp_path),
-        patch.object(pm, "_STATE_FILE", state_file),
-    ):
+    with patch("src.persistence.get_config", return_value={"database": {"url": db_url}}):
         store = pm.PositionStore()
 
-    with (
-        patch.object(pm, "_DATA_DIR", tmp_path),
-        patch.object(pm, "_STATE_FILE", state_file),
-    ):
-        yield store
+    yield store
 
 
 # ---------------------------------------------------------------------------

@@ -110,7 +110,7 @@ class TestOrderManagerPaperMode:
         from src.risk_manager import RiskManager
 
         risk = MagicMock(spec=RiskManager)
-        risk.approve.return_value = False
+        risk.approve.return_value = (False, "mock rejection")
 
         mgr, _ = _make_order_manager(
             risk_manager=risk,

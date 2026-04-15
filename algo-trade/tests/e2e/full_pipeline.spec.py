@@ -183,7 +183,7 @@ class TestFullPipelineExecution:
 
         # Fill up all position slots
         filled_risk = MagicMock(spec=RiskManager)
-        filled_risk.approve.return_value = False
+        filled_risk.approve.return_value = (False, "mock rejection")
 
         signal_q = asyncio.Queue()
         from src.execution.mock_adapter import MockBrokerAdapter

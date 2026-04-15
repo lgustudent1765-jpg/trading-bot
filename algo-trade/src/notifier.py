@@ -44,33 +44,48 @@ class Notifier:
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
-        # Store initial config but always read live values from get_config() at send time.
-        pass
+        # Store initial config; live overrides still applied via get_config() when
+        # the instance config has no notifications key (production path).
+        self._init_config = config or {}
 
     def _get_email_cfg(self):
-        """Read live email config so Settings UI changes take effect without restart."""
-        cfg = get_config()
-        notif = cfg.get("notifications", {})
+        """Read email config from instance config (tests) or live get_config() (production)."""
+        if self._init_config.get("notifications"):
+            notif = self._init_config.get("notifications", {})
+        else:
+            notif = get_config().get("notifications", {})
         email = notif.get("email", {})
+        # Allow tests to override credentials via instance attributes.
+        user = getattr(self, "_email_user", None)
+        if user is None:
+            user = os.getenv("NOTIFY_EMAIL_USER") or email.get("username", "")
+        password = getattr(self, "_email_pass", None)
+        if password is None:
+            password = os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", "")
         return {
             "enabled":   email.get("enabled", False),
             "provider":  os.getenv("NOTIFY_EMAIL_PROVIDER") or email.get("provider", "smtp"),
             "api_key":   os.getenv("NOTIFY_EMAIL_API_KEY") or email.get("api_key", ""),
             "smtp_host": email.get("smtp_host", "smtp.gmail.com"),
             "smtp_port": int(email.get("smtp_port", 587)),
-            "user":      os.getenv("NOTIFY_EMAIL_USER") or email.get("username", ""),
-            "password":  os.getenv("NOTIFY_EMAIL_PASS") or email.get("password", ""),
-            "to":        email.get("recipient", "") or os.getenv("NOTIFY_EMAIL_USER") or email.get("username", ""),
+            "user":      user,
+            "password":  password,
+            "to":        email.get("recipient", "") or user,
         }
 
     def _get_webhook_cfg(self):
-        """Read live webhook config so Settings UI changes take effect without restart."""
-        cfg = get_config()
-        notif = cfg.get("notifications", {})
+        """Read webhook config from instance config (tests) or live get_config() (production)."""
+        if self._init_config.get("notifications"):
+            notif = self._init_config.get("notifications", {})
+        else:
+            notif = get_config().get("notifications", {})
         webhook = notif.get("webhook", {})
+        url = getattr(self, "_webhook_url", None)
+        if url is None:
+            url = os.getenv("NOTIFY_WEBHOOK_URL", webhook.get("url", ""))
         return {
             "enabled": webhook.get("enabled", False),
-            "url":     os.getenv("NOTIFY_WEBHOOK_URL", webhook.get("url", "")),
+            "url":     url,
         }
 
     def _send_email_sync(self, subject: str, body: str) -> None:
@@ -224,4 +239,19 @@ class Notifier:
             f"Exit      : ${exit_price:.2f}\n"
             f"P&L       : ${pnl:+.2f}\n"
         )
+        await self.send(subject, body)
+
+    async def startup(self, mode: str) -> None:
+        subject = "[ALGO-TRADE] System Started"
+        body = f"Trading system started in {mode} mode."
+        await self.send(subject, body)
+
+    async def shutdown(self) -> None:
+        subject = "[ALGO-TRADE] System Shutdown"
+        body = "Trading system has shut down gracefully."
+        await self.send(subject, body)
+
+    async def circuit_breaker(self, adapter_name: str, reason: str) -> None:
+        subject = f"[ALGO-TRADE] Circuit Breaker: {adapter_name}"
+        body = f"Adapter: {adapter_name}\nReason:  {reason}\n"
         await self.send(subject, body)

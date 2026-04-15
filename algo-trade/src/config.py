@@ -143,6 +143,11 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
                 "trade_token":   os.getenv("WEBULL_TRADE_TOKEN", ""),
                 "account_id":    os.getenv("WEBULL_ACCOUNT_ID", ""),
             },
+            "robinhood": {
+                "username": os.getenv("ROBINHOOD_USERNAME", ""),
+                "password": os.getenv("ROBINHOOD_PASSWORD", ""),
+                "mfa_code": os.getenv("ROBINHOOD_MFA_CODE", ""),
+            },
         },
         "market_data": {
             "fmp_api_key":    os.getenv("FMP_API_KEY", ""),

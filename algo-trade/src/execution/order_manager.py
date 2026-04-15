@@ -249,6 +249,72 @@ class OrderManager:
             except Exception as exc:
                 log.error("stop monitor error", error=str(exc))
 
+    async def recover_open_positions(self) -> None:
+        """Re-arm stop monitors for positions that survived a restart."""
+        if not self._position_store:
+            return
+        positions = self._position_store.get_positions()
+        for option_symbol, pos in positions.items():
+            try:
+                # Option symbol format: SYM_EXPIRY_STRIKE_TYPE (e.g. AAPL_2026-05-16_175.0_C)
+                parts = option_symbol.split("_")
+                if len(parts) < 4:
+                    log.warning("recover: skipping unparseable symbol", option_symbol=option_symbol)
+                    continue
+
+                from src.events import (
+                    OptionContract, OrderEvent, OrderSide, OrderStatus,
+                    SignalDirection, TradePlan,
+                )
+
+                direction_str = pos["direction"].upper()
+                direction = SignalDirection.CALL if direction_str == "CALL" else SignalDirection.PUT
+                opt_type = "call" if direction == SignalDirection.CALL else "put"
+
+                contract = OptionContract(
+                    symbol=pos["symbol"],
+                    expiry=parts[1],
+                    strike=float(parts[2]),
+                    option_type=opt_type,
+                    bid=pos["entry_price"],
+                    ask=pos["entry_price"],
+                    volume=0,
+                    open_interest=0,
+                    implied_volatility=0.0,
+                    delta=0.5,
+                    underlying_price=pos.get("underlying_price", 0.0),
+                )
+                plan = TradePlan(
+                    symbol=pos["symbol"],
+                    direction=direction,
+                    contract=contract,
+                    entry_limit=pos["entry_price"],
+                    stop_loss=pos["stop_loss"],
+                    take_profit=pos["take_profit"],
+                    position_size=pos["quantity"],
+                    rationale="recovered from persistence",
+                )
+                entry_order = OrderEvent(
+                    order_id=f"recovered_{option_symbol}",
+                    symbol=pos["symbol"],
+                    option_symbol=option_symbol,
+                    side=OrderSide.BUY,
+                    quantity=pos["quantity"],
+                    limit_price=pos["entry_price"],
+                    status=OrderStatus.FILLED,
+                    filled_qty=pos["quantity"],
+                    avg_fill_price=pos["entry_price"],
+                )
+                self._risk.register_open(option_symbol)
+                asyncio.ensure_future(self._monitor_stop(entry_order, plan, option_symbol))
+                log.info("recovered position — stop monitor re-armed", option_symbol=option_symbol)
+            except Exception as exc:
+                log.warning(
+                    "recover: failed to recover position",
+                    option_symbol=option_symbol,
+                    error=str(exc),
+                )
+
     async def run(self) -> None:
         log.info("order_manager started", mode=self._mode)
         while True:

@@ -72,27 +72,19 @@ class TestPositionStoreAdd:
         assert position_store.open_count == 2
 
     def test_add_position_is_persisted_to_disk(self, tmp_path):
-        """Simulate a restart by creating a fresh store pointing at the same file.
-        Bug fix: removed _LOCK_FILE patch — that attribute does not exist in persistence.py.
-        """
+        """Simulate a restart by creating two stores pointing at the same SQLite file."""
         import src.persistence as pm
 
-        state_file = tmp_path / "positions.json"
+        db_url = f"sqlite:///{tmp_path}/test.db"
 
-        with (
-            patch.object(pm, "_DATA_DIR", tmp_path),
-            patch.object(pm, "_STATE_FILE", state_file),
-        ):
+        with patch("src.persistence.get_config", return_value={"database": {"url": db_url}}):
             store1 = pm.PositionStore()
             store1.add_position(
                 "AAPL_2026-05-16_175.0_C", "AAPL", "CALL", 2.55, 1.85, 4.15, 10
             )
 
         # Reload from the same file (simulates restart)
-        with (
-            patch.object(pm, "_DATA_DIR", tmp_path),
-            patch.object(pm, "_STATE_FILE", state_file),
-        ):
+        with patch("src.persistence.get_config", return_value={"database": {"url": db_url}}):
             store2 = pm.PositionStore()
 
         assert "AAPL_2026-05-16_175.0_C" in store2.get_positions()
@@ -148,17 +140,17 @@ class TestCooldowns:
         assert not position_store.is_on_cooldown("AAPL", cooldown_minutes=0)
 
     def test_set_cooldown_is_persisted_to_disk(self, tmp_path):
-        """Bug fix: removed _LOCK_FILE patch — not an attribute of persistence.py."""
+        """Simulate a restart — cooldown should survive store reload."""
         import src.persistence as pm
 
-        state_file = tmp_path / "positions.json"
+        db_url = f"sqlite:///{tmp_path}/test.db"
 
-        with (
-            patch.object(pm, "_DATA_DIR", tmp_path),
-            patch.object(pm, "_STATE_FILE", state_file),
-        ):
+        with patch("src.persistence.get_config", return_value={"database": {"url": db_url}}):
             store = pm.PositionStore()
             store.set_cooldown("TSLA")
-            # cooldown should be in the file
-            raw = json.loads(state_file.read_text())
-            assert "TSLA" in raw.get("signal_cooldowns", {})
+
+        # Reload from the same DB (simulates restart)
+        with patch("src.persistence.get_config", return_value={"database": {"url": db_url}}):
+            store2 = pm.PositionStore()
+
+        assert store2.is_on_cooldown("TSLA", cooldown_minutes=30)
