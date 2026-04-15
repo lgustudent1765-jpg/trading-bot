@@ -78,7 +78,7 @@ class RiskManager:
         )
         return True
 
-    def approve(self, plan: TradePlan, equity: float) -> bool:
+    def approve(self, plan: TradePlan, equity: float) -> tuple[bool, str]:
         """
         Validate and size a TradePlan.
 
@@ -86,7 +86,7 @@ class RiskManager:
 
         Returns
         -------
-        bool — True if the plan passes risk checks and has position_size >= 1.
+        (bool, reason) — True + empty string if approved; False + reason string if rejected.
         """
         if self.open_position_count >= self._max_open:
             log.warning(
@@ -94,7 +94,7 @@ class RiskManager:
                 limit=self._max_open,
                 current=self.open_position_count,
             )
-            return False
+            return False, f"max open positions reached ({self.open_position_count}/{self._max_open})"
 
         # Check stop-loss / take-profit are logically consistent.
         if plan.direction == SignalDirection.CALL:
@@ -105,7 +105,7 @@ class RiskManager:
                     entry=plan.entry_limit,
                     tp=plan.take_profit,
                 )
-                return False
+                return False, f"invalid SL/TP: stop={plan.stop_loss} entry={plan.entry_limit} tp={plan.take_profit}"
         else:
             if not (plan.take_profit < plan.entry_limit < plan.stop_loss):
                 log.warning(
@@ -114,13 +114,13 @@ class RiskManager:
                     entry=plan.entry_limit,
                     tp=plan.take_profit,
                 )
-                return False
+                return False, f"invalid SL/TP: stop={plan.stop_loss} entry={plan.entry_limit} tp={plan.take_profit}"
 
         # Position sizing: 1 contract = 100 shares.
         max_capital = equity * self._max_pos_pct
         contract_cost = plan.entry_limit * 100  # one contract
         if contract_cost <= 0:
-            return False
+            return False, "entry price is zero"
 
         size = int(max_capital // contract_cost)
         if size < 1:
@@ -129,7 +129,7 @@ class RiskManager:
                 max_capital=max_capital,
                 contract_cost=contract_cost,
             )
-            return False
+            return False, f"insufficient equity: need ${contract_cost:.2f}/contract, have ${max_capital:.2f}"
 
         plan.position_size = size
         log.info(
@@ -141,4 +141,4 @@ class RiskManager:
             stop=plan.stop_loss,
             target=plan.take_profit,
         )
-        return True
+        return True, ""

@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from src.events import OrderEvent, OrderSide, OrderStatus, SignalEvent
 from src.execution.base import BrokerAdapter
 from src.logger import get_logger
+from src.market_adapter.base import MarketDataAdapter
 from src.risk_manager import RiskManager
 
 log = get_logger(__name__)
@@ -35,6 +36,7 @@ class OrderManager:
         notifier=None,
         signal_store: Optional[list] = None,
         action_store: Optional[list] = None,
+        market_adapter: Optional[MarketDataAdapter] = None,
         **kwargs: Any,
     ) -> None:
         self._broker = broker
@@ -46,6 +48,7 @@ class OrderManager:
         self._notifier = notifier
         self._signal_store = signal_store
         self._action_store = action_store
+        self._market = market_adapter
         self._open_orders: Dict[str, SignalEvent] = {}
 
     def _record_action(self, event: str, symbol: Optional[str], detail: str, data: dict) -> None:
@@ -64,12 +67,13 @@ class OrderManager:
         plan = signal.trade_plan
 
         equity = await self._broker.get_account_equity()
-        if not self._risk.approve(plan, equity):
-            log.info("signal rejected by risk manager", symbol=plan.symbol)
+        approved, reject_reason = self._risk.approve(plan, equity)
+        if not approved:
+            log.info("signal rejected by risk manager", symbol=plan.symbol, reason=reject_reason)
             self._record_action(
                 "SIGNAL_REJECTED", plan.symbol,
-                f"{plan.direction.value} signal rejected by risk manager",
-                {"direction": plan.direction.value, "entry": plan.entry_limit},
+                f"{plan.direction.value} signal rejected: {reject_reason}",
+                {"direction": plan.direction.value, "entry": plan.entry_limit, "reason": reject_reason},
             )
             return
 
@@ -162,9 +166,17 @@ class OrderManager:
         while True:
             await asyncio.sleep(_STOP_POLL_INTERVAL)
             try:
+                if self._market is not None:
+                    try:
+                        quote = await self._market.get_quote(plan.symbol)
+                        current_price = quote.price
+                    except Exception:
+                        current_price = plan.contract.underlying_price
+                else:
+                    current_price = plan.contract.underlying_price
                 chain = await self._broker.get_option_chain(
                     plan.symbol,
-                    underlying_price=plan.contract.underlying_price,
+                    underlying_price=current_price,
                 )
                 contract = next(
                     (c for c in chain

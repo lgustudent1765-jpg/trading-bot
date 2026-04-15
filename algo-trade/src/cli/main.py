@@ -68,8 +68,8 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
         log.info("loaded config overrides from database")
 
     # Re-register positions that survived a restart.
-    for sym in position_store.symbols():
-        risk_manager.register_open(sym)
+    for opt_sym in position_store.get_positions().keys():
+        risk_manager.register_open(opt_sym)
     if position_store.open_count:
         log.info("restored positions from database", count=position_store.open_count)
 
@@ -108,7 +108,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     order_mgr  = OrderManager(
         broker_adapter, risk_manager, signal_queue, mode, config,
         position_store=position_store, notifier=notifier,
-        action_store=_action_store,
+        action_store=_action_store, market_adapter=market_adapter,
     )
 
     # Signal tap: copy signals to the API signal_store.

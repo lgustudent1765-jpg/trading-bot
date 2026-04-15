@@ -168,7 +168,7 @@ class TestApproveCall:
     def test_valid_call_plan_is_approved(self):
         rm = _rm()
         plan = _call_plan(entry=2.50, stop=1.80, target=4.20)
-        assert rm.approve(plan, equity=100_000) is True
+        assert rm.approve(plan, equity=100_000)[0] is True
 
     def test_valid_call_sets_position_size(self):
         """position_size = floor(equity * max_pos_pct / (entry * 100))."""
@@ -182,32 +182,32 @@ class TestApproveCall:
         """CALL: stop must be < entry. Inverted stop (stop > entry) → rejected."""
         rm = _rm()
         plan = _call_plan(entry=2.50, stop=3.50, target=4.20)  # stop > entry: invalid
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
     def test_call_inverted_target_below_entry_rejected(self):
         """CALL: target must be > entry. Inverted target → rejected."""
         rm = _rm()
         plan = _call_plan(entry=2.50, stop=1.80, target=1.50)  # target < entry: invalid
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
     def test_max_positions_reached_call_rejected(self):
         rm = _rm(max_open=2)
         rm.register_open("SYM_A")
         rm.register_open("SYM_B")
         plan = _call_plan()
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
     def test_insufficient_equity_for_minimum_size_rejected(self):
         """When equity is too small to buy even one contract, reject."""
         rm = _rm(max_pos_pct=0.001)  # 0.1% of $100 = $0.10 — far too small
         plan = _call_plan(entry=50.0)  # one contract costs $5000
-        assert rm.approve(plan, equity=100) is False
+        assert rm.approve(plan, equity=100)[0] is False
 
     def test_zero_entry_price_rejected(self):
         """entry_limit=0 means contract_cost=0 → rejected."""
         rm = _rm()
         plan = _call_plan(entry=0.0, stop=0.0, target=0.0)
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class TestApprovePut:
         """For PUT: target < entry < stop is the correct relationship."""
         rm = _rm()
         plan = _put_plan(entry=3.00, stop=4.50, target=1.50)
-        assert rm.approve(plan, equity=100_000) is True
+        assert rm.approve(plan, equity=100_000)[0] is True
 
     def test_valid_put_sets_position_size(self):
         rm = _rm(max_pos_pct=0.05)
@@ -232,13 +232,13 @@ class TestApprovePut:
         """PUT: stop must be > entry. Inverted stop (stop < entry) → rejected."""
         rm = _rm()
         plan = _put_plan(entry=3.00, stop=2.00, target=1.50)  # stop < entry: invalid
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
     def test_put_inverted_target_above_entry_rejected(self):
         """PUT: target must be < entry. Inverted target (target > entry) → rejected."""
         rm = _rm()
         plan = _put_plan(entry=3.00, stop=4.50, target=4.00)  # target > entry: invalid
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ class TestApproveCapacity:
         rm = _rm(max_open=max_open)
         for i in range(max_open):
             plan = _call_plan(entry=2.50)
-            approved = rm.approve(plan, equity=100_000)
+            approved, _ = rm.approve(plan, equity=100_000)
             assert approved is True, f"Plan {i} should be approved"
             rm.register_open(f"SYM_{i}")
 
@@ -264,13 +264,13 @@ class TestApproveCapacity:
             rm.register_open(f"SYM_{i}")
 
         plan = _call_plan()
-        assert rm.approve(plan, equity=100_000) is False
+        assert rm.approve(plan, equity=100_000)[0] is False
 
     def test_after_close_capacity_is_freed(self):
         """After closing a position, the slot is freed and a new plan is approved."""
         rm = _rm(max_open=1)
         rm.register_open("SYM_A")
-        assert rm.approve(_call_plan(), equity=100_000) is False  # full
+        assert rm.approve(_call_plan(), equity=100_000)[0] is False  # full
 
         rm.register_close("SYM_A")
-        assert rm.approve(_call_plan(), equity=100_000) is True   # slot freed
+        assert rm.approve(_call_plan(), equity=100_000)[0] is True   # slot freed

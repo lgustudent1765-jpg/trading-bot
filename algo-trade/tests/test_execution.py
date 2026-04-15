@@ -125,7 +125,7 @@ class TestRiskManager:
         config = _make_config()
         rm = RiskManager(config)
         signal = _make_call_signal()
-        approved = rm.approve(signal.trade_plan, equity=100_000)
+        approved, _ = rm.approve(signal.trade_plan, equity=100_000)
         assert approved is True
         assert signal.trade_plan.position_size >= 1
 
@@ -142,7 +142,7 @@ class TestRiskManager:
         rm = RiskManager(config)
         rm.register_open("AAPL_CALL_1")  # fills the single slot
         signal = _make_call_signal()
-        approved = rm.approve(signal.trade_plan, equity=100_000)
+        approved, _ = rm.approve(signal.trade_plan, equity=100_000)
         assert approved is False
 
     def test_rejects_inverted_sl_tp(self):
@@ -150,7 +150,7 @@ class TestRiskManager:
         rm = RiskManager(config)
         # For CALL: stop must be < entry < target — invert them intentionally.
         signal = _make_call_signal(entry=2.10, stop=3.50, target=1.50)
-        approved = rm.approve(signal.trade_plan, equity=100_000)
+        approved, _ = rm.approve(signal.trade_plan, equity=100_000)
         assert approved is False
 
     def test_position_sized_correctly(self):
