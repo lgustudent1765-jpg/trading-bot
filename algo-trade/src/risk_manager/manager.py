@@ -33,13 +33,18 @@ class RiskManager:
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
+        self._config = config  # kept by reference so live updates are reflected
         risk = config.get("risk", {})
         self._max_pos_pct: float = float(risk.get("max_position_pct", 0.05))
-        self._max_open: int = int(risk.get("max_open_positions", 5))
         self._pdt_threshold: float = float(risk.get("pdt_equity_threshold", 25_000))
         self._sl_mult: float = float(risk.get("stop_loss_atr_mult", 1.5))
         self._tp_mult: float = float(risk.get("take_profit_atr_mult", 3.0))
         self._open_positions: List[str] = []  # option symbols of open positions
+
+    @property
+    def _max_open(self) -> int:
+        """Read live from config so runtime updates take effect immediately."""
+        return int(self._config.get("risk", {}).get("max_open_positions", 5))
 
     @property
     def open_position_count(self) -> int:
