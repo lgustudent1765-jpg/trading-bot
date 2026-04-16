@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -157,21 +157,30 @@ export default function SettingsPage() {
   const [testingEmail, setTestingEmail] = useState(false);
   const [testResult,   setTestResult]   = useState<{ ok: boolean; message: string } | null>(null);
 
+  // Track last values fetched from server to detect user-edited fields
+  const serverCfgRef = useRef<ConfigPayload>({});
+
+  const CREDENTIAL_KEYS: (keyof ConfigPayload)[] = [
+    "webull_device_id", "webull_access_token", "webull_refresh_token", "webull_trade_token",
+  ];
+
+  function parseConfig(data: ConfigPayload): { cleaned: ConfigPayload; masked: Set<keyof ConfigPayload> } {
+    const masked = new Set<keyof ConfigPayload>();
+    const cleaned = { ...data };
+    for (const k of CREDENTIAL_KEYS) {
+      if (cleaned[k] === "********") {
+        masked.add(k);
+        cleaned[k] = undefined;
+      }
+    }
+    return { cleaned, masked };
+  }
+
   const load = useCallback(async () => {
     try {
       const data = await api.getConfig();
-      // H-1: strip masked sentinels so credential inputs start empty
-      const CREDENTIAL_KEYS: (keyof ConfigPayload)[] = [
-        "webull_device_id", "webull_access_token", "webull_refresh_token", "webull_trade_token",
-      ];
-      const masked = new Set<keyof ConfigPayload>();
-      const cleaned = { ...data };
-      for (const k of CREDENTIAL_KEYS) {
-        if (cleaned[k] === "********") {
-          masked.add(k);
-          cleaned[k] = undefined;
-        }
-      }
+      const { cleaned, masked } = parseConfig(data);
+      serverCfgRef.current = cleaned;
       setMaskedFields(masked);
       setCfg(cleaned);
       setError("");
@@ -180,9 +189,36 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { load(); }, [load]);
+  // Poll every 5 s — only update fields the user hasn't locally changed
+  const poll = useCallback(async () => {
+    try {
+      const data = await api.getConfig();
+      const { cleaned, masked } = parseConfig(data);
+      setMaskedFields(masked);
+      setCfg((prev) => {
+        const prevServer = serverCfgRef.current;
+        const next = { ...prev };
+        for (const _key of Object.keys(cleaned) as (keyof ConfigPayload)[]) {
+          // Only overwrite if the user hasn't changed this field since last load
+          if (JSON.stringify(prev[_key]) === JSON.stringify(prevServer[_key])) {
+            (next as Record<string, unknown>)[_key] = (cleaned as Record<string, unknown>)[_key];
+          }
+        }
+        return next;
+      });
+      serverCfgRef.current = cleaned;
+    } catch {
+      // Silently ignore poll errors — don't clear the form on transient failures
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    load();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [load, poll]);
 
   function set<K extends keyof ConfigPayload>(key: K, val: ConfigPayload[K]) {
     setCfg((prev) => ({ ...prev, [key]: val }));
@@ -196,7 +232,7 @@ export default function SettingsPage() {
       await api.updateConfig(payload);
       setSaved((s) => ({ ...s, [section]: true }));
       setTimeout(() => setSaved((s) => ({ ...s, [section]: false })), 2500);
-      load(); // H-3/L-1: re-sync fmp_api_key_set and all state from backend
+      await load(); // H-3/L-1: re-sync fmp_api_key_set and all state from backend
     } catch {
       setSaveError("Save failed — check that the backend is running.");
     } finally {
