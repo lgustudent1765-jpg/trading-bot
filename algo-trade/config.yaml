@@ -57,7 +57,7 @@ risk:
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 3.0
 screener:
-  market_hours_only: true
+  market_hours_only: false
   poll_interval_seconds: 60
-  provider: yahoo
+  provider: mock
   top_n: 10

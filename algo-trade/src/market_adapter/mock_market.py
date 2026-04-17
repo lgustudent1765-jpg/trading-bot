@@ -22,18 +22,24 @@ _LOSER_SYMBOLS  = ["F", "GM", "BA", "GE", "XOM",
 
 
 def _synthetic_bars(symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """Generate deterministic OHLCV bars using a seeded random walk."""
-    rng = random.Random(hash(symbol) & 0xFFFF)
+    """Generate OHLCV bars with a trend bias to reliably trigger RSI signals.
+
+    Uses a random trend direction (+/-) per call so RSI(14) reliably reaches
+    overbought (>70) or oversold (<30) territory within the lookback window,
+    ensuring the strategy engine generates CALL or PUT signals.
+    """
     base = 150.0
     bars = []
     ts = datetime.utcnow() - timedelta(minutes=limit)
+    # Random trend: +0.35 (uptrend → RSI > 70) or -0.35 (downtrend → RSI < 30)
+    trend = random.choice([0.35, -0.35])
     for i in range(limit):
-        change = rng.gauss(0, 0.5)
+        change = random.gauss(trend, 0.4)
         open_ = base
         close_ = max(1.0, base + change)
-        high = max(open_, close_) + abs(rng.gauss(0, 0.2))
-        low = min(open_, close_) - abs(rng.gauss(0, 0.2))
-        vol = int(rng.uniform(100_000, 500_000))
+        high = max(open_, close_) + abs(random.gauss(0, 0.2))
+        low = min(open_, close_) - abs(random.gauss(0, 0.2))
+        vol = int(random.uniform(100_000, 500_000))
         bars.append({
             "datetime": (ts + timedelta(minutes=i)).isoformat(),
             "open": round(open_, 2),
