@@ -15,6 +15,7 @@ All methods print human-readable order actions to stdout (visible in paper mode)
 
 from __future__ import annotations
 
+import random
 import uuid
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -26,16 +27,28 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 _EQUITY = 100_000.0
+_NEUTRAL_SPOT = 150.0  # baseline underlying price used for delta-based option pricing
 
 
 def _make_chain(symbol: str, spot: float = 150.0) -> List[OptionContract]:
-    """Generate a synthetic option chain for *symbol*."""
+    """Generate a synthetic option chain for *symbol* with delta-based pricing.
+
+    Option prices respond to *spot* so that stop-loss / take-profit thresholds in
+    the stop monitor can be triggered as the simulated underlying drifts.
+    """
     expiry = (date.today() + timedelta(days=14)).isoformat()
+    spot_move = spot - _NEUTRAL_SPOT
     contracts = []
     for offset in [-10, -5, 0, 5, 10]:
         for opt_type in ("call", "put"):
             strike = round(spot + offset, 0)
-            bid = round(max(0.10, 2.0 - abs(offset) * 0.1), 2)
+            base_mid = max(0.10, 2.0 - abs(offset) * 0.1)
+            # Delta approximation: calls gain when spot rises, puts gain when spot falls.
+            delta = 0.5 - abs(offset) * 0.03
+            if opt_type == "put":
+                delta = -delta
+            mid = round(max(0.05, base_mid + delta * spot_move * 0.02), 2)
+            bid = round(max(0.05, mid - 0.05), 2)
             ask = round(bid + 0.10, 2)
             contracts.append(
                 OptionContract(
@@ -61,9 +74,15 @@ class MockBrokerAdapter(BrokerAdapter):
     def __init__(self, equity: float = _EQUITY) -> None:
         self._equity = equity
         self._orders: Dict[str, OrderEvent] = {}
+        # Tracks per-symbol cumulative price drift so the stop monitor sees
+        # changing option prices on every poll and can trigger exits.
+        self._price_offsets: Dict[str, float] = {}
 
     async def get_option_chain(self, symbol: str, underlying_price: float = 0.0) -> List[OptionContract]:
-        return _make_chain(symbol, spot=underlying_price if underlying_price > 0 else 150.0)
+        # Advance the simulated underlying by a random-walk step (~1.5 pt std dev).
+        self._price_offsets[symbol] = self._price_offsets.get(symbol, 0.0) + random.gauss(0, 1.5)
+        spot = (underlying_price if underlying_price > 0 else _NEUTRAL_SPOT) + self._price_offsets[symbol]
+        return _make_chain(symbol, spot=spot)
 
     async def place_limit_order(
         self,

@@ -274,6 +274,99 @@ export default function StatusPage() {
         </div>
       </div>
 
+      {/* Recent Trades */}
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-600 mb-2 px-0.5">
+          Recent Trades
+        </p>
+        <Card>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="flex flex-col gap-3 p-5">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="h-10 rounded-lg bg-zinc-800/60 animate-pulse" />
+                ))}
+              </div>
+            ) : (() => {
+              const tradeEvents = actions.filter(
+                (a) => a.event === "ORDER_FILLED" || a.event === "POSITION_CLOSED"
+              );
+              if (tradeEvents.length === 0) {
+                return (
+                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+                    <TrendingUp className="w-7 h-7 text-zinc-700" />
+                    <p className="text-sm font-medium text-zinc-400">No trades yet</p>
+                    <p className="text-xs text-zinc-600 max-w-xs">
+                      Buy and sell events appear here as the engine executes orders.
+                    </p>
+                  </div>
+                );
+              }
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-800">
+                        {["Type", "Symbol", "Detail", "Time"].map((h) => (
+                          <th
+                            key={h}
+                            className="px-5 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider whitespace-nowrap"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60">
+                      {tradeEvents.map((a, i) => {
+                        const isBuy = a.event === "ORDER_FILLED";
+                        return (
+                          <tr
+                            key={`trade-${a.event}-${a.ts}-${i}`}
+                            className="hover:bg-zinc-800/30 transition-colors"
+                          >
+                            <td className="px-5 py-3.5 whitespace-nowrap">
+                              <span
+                                className={cn(
+                                  "inline-block px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wide",
+                                  isBuy
+                                    ? "bg-emerald-500/15 text-emerald-400"
+                                    : "bg-amber-500/15 text-amber-400"
+                                )}
+                              >
+                                {isBuy ? "BUY" : "CLOSE"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 font-medium text-zinc-100 whitespace-nowrap">
+                              {a.symbol ?? <span className="text-zinc-600">—</span>}
+                            </td>
+                            <td
+                              className="px-5 py-3.5 text-zinc-400 text-xs max-w-[360px] truncate"
+                              title={a.detail}
+                            >
+                              {a.detail || <span className="text-zinc-600">—</span>}
+                            </td>
+                            <td className="px-5 py-3.5 whitespace-nowrap">
+                              <div
+                                className="flex items-center gap-1 text-xs text-zinc-500"
+                                title={a.ts?.slice(0, 19).replace("T", " ")}
+                              >
+                                <Clock className="w-3 h-3 shrink-0" aria-hidden />
+                                {timeAgo(a.ts)}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Activity log */}
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-600 mb-2 px-0.5">
