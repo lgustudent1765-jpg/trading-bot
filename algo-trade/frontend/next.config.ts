@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
     return [{ source: "/", destination: "/dashboard", permanent: false }];
   },
   async rewrites() {
-    const apiUrl = process.env.ALGO_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+    const apiUrl = process.env.ALGO_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8181";
     return [
       {
         source: "/api/:path*",
