@@ -163,7 +163,7 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
         },
         "api_server": {
             "host": "0.0.0.0",
-            "port": int(os.getenv("API_PORT", "8080")),
+            "port": int(os.getenv("API_PORT", "8181")),
         },
         "database": {
             "url": os.getenv("DATABASE_URL", "sqlite:///data/algo_trade.db"),

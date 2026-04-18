@@ -50,8 +50,8 @@ export default function BacktestPage() {
   }
 
   const isUp         = (result?.total_pnl_pct ?? 0) >= 0;
-  const startEquity  = result?.equity_curve[0]?.equity ?? 10000;
-  const endEquity    = result?.equity_curve[result.equity_curve.length - 1]?.equity ?? 10000;
+  const startEquity  = result?.equity_curve?.[0]?.equity ?? 10000;
+  const endEquity    = result?.equity_curve?.at(-1)?.equity ?? 10000;
 
   return (
     <div className="p-5 md:p-6 space-y-4 max-w-[1440px]">
@@ -104,7 +104,7 @@ export default function BacktestPage() {
           </div>
 
           {/* Equity curve */}
-          {result.equity_curve.length > 1 && (
+          {(result.equity_curve?.length ?? 0) > 1 && (
             <Card>
               <CardHeader>
                 <div className="flex items-start justify-between">
@@ -138,7 +138,7 @@ export default function BacktestPage() {
             </Card>
           )}
 
-          {result.equity_curve.length <= 1 && (
+          {(result.equity_curve?.length ?? 0) <= 1 && (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12 gap-2 text-center">
                 <p className="text-sm text-zinc-400">No completed trades in this period</p>

@@ -92,7 +92,10 @@ class PositionStore:
             from pathlib import Path
             Path("data").mkdir(exist_ok=True)
 
-        self.engine = create_engine(db_url, pool_pre_ping=True)
+        engine_kwargs: Dict[str, Any] = {"pool_pre_ping": True}
+        if not db_url.startswith("sqlite"):
+            engine_kwargs.update({"pool_size": 5, "max_overflow": 10, "pool_recycle": 3600})
+        self.engine = create_engine(db_url, **engine_kwargs)
         Base.metadata.create_all(self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         

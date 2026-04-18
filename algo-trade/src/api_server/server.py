@@ -13,6 +13,7 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -79,7 +80,10 @@ def create_app(
         })
 
     async def get_signals(request: web.Request) -> web.Response:
-        limit = int(request.rel_url.query.get("limit", _MAX_SIGNALS))
+        try:
+            limit = max(1, min(500, int(request.rel_url.query.get("limit", _MAX_SIGNALS))))
+        except (TypeError, ValueError):
+            limit = _MAX_SIGNALS
         return web.json_response(signal_store[-limit:])
 
     async def get_positions(request: web.Request) -> web.Response:
@@ -113,7 +117,10 @@ def create_app(
         })
 
     async def get_history(request: web.Request) -> web.Response:
-        limit = int(request.rel_url.query.get("limit", 50))
+        try:
+            limit = max(1, min(500, int(request.rel_url.query.get("limit", 50))))
+        except (TypeError, ValueError):
+            limit = 50
         return web.json_response(list(reversed(_action_store[-limit:])))
 
     async def get_status(request: web.Request) -> web.Response:
@@ -154,14 +161,15 @@ def create_app(
             for s in reversed(recent_signals):
                 _direction = str(s.get("direction", s.get("side", ""))).upper()
                 side_color = "#00ff00" if _direction in ("BUY", "CALL") else "#ff4444"
+                _e = lambda v: _html.escape(str(v))
                 sig_rows += (
                     f"<tr>"
-                    f"<td>{s.get('ts', s.get('timestamp', s.get('time', '—')))}</td>"
-                    f"<td><b>{s.get('symbol', '—')}</b></td>"
-                    f"<td style='color:{side_color}'>{s.get('direction', s.get('side', s.get('action', '—'))).upper()}</td>"
-                    f"<td>{s.get('entry', s.get('price', s.get('entry_price', '—')))}</td>"
-                    f"<td>{s.get('size', s.get('quantity', s.get('qty', '—')))}</td>"
-                    f"<td style='color:#aaa'>{s.get('rationale', s.get('strategy', s.get('reason', '—')))}</td>"
+                    f"<td>{_e(s.get('ts', s.get('timestamp', s.get('time', '—'))))}</td>"
+                    f"<td><b>{_e(s.get('symbol', '—'))}</b></td>"
+                    f"<td style='color:{side_color}'>{_e(s.get('direction', s.get('side', s.get('action', '—'))).upper())}</td>"
+                    f"<td>{_e(s.get('entry', s.get('price', s.get('entry_price', '—'))))}</td>"
+                    f"<td>{_e(s.get('size', s.get('quantity', s.get('qty', '—'))))}</td>"
+                    f"<td style='color:#aaa'>{_e(s.get('rationale', s.get('strategy', s.get('reason', '—'))))}</td>"
                     f"</tr>"
                 )
             signals_html = f"""
@@ -189,14 +197,14 @@ def create_app(
             for a in recent_actions:
                 ev = str(a.get("event", ""))
                 color = _EVENT_COLORS.get(ev, "#aaaaaa")
-                sym = a.get("symbol") or "—"
-                ts  = str(a.get("ts", "—"))[:19].replace("T", " ")
+                sym = _html.escape(str(a.get("symbol") or "—"))
+                ts  = _html.escape(str(a.get("ts", "—"))[:19].replace("T", " "))
                 action_rows += (
                     f"<tr>"
                     f"<td style='color:#555'>{ts}</td>"
-                    f"<td style='color:{color};font-weight:bold'>{ev}</td>"
+                    f"<td style='color:{color};font-weight:bold'>{_html.escape(ev)}</td>"
                     f"<td><b>{sym}</b></td>"
-                    f"<td style='color:#ccc'>{a.get('detail', '—')}</td>"
+                    f"<td style='color:#ccc'>{_html.escape(str(a.get('detail', '—')))}</td>"
                     f"</tr>"
                 )
             activity_html = f"""

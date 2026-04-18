@@ -137,7 +137,10 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             position_store.add_signal(data) # Persist to DB
             if len(_signal_store) > 200:
                 _signal_store.pop(0)
-            await signal_queue.put(sig)  # pass on to order manager
+            try:
+                signal_queue.put_nowait(sig)  # pass on to order manager
+            except asyncio.QueueFull:
+                log.warning("signal_queue full — dropping signal", symbol=plan.symbol)
 
     api_cfg = config.get("api_server", {})
     app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store)
@@ -155,7 +158,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             asyncio.ensure_future(order_mgr.run()),
             asyncio.ensure_future(_signal_tap()),
             asyncio.ensure_future(
-                run_api_server(app, api_cfg.get("host", "0.0.0.0"), api_cfg.get("port", 8080))
+                run_api_server(app, api_cfg.get("host", "0.0.0.0"), api_cfg.get("port", 8181))
             ),
         ]
         task_list.extend(tasks)

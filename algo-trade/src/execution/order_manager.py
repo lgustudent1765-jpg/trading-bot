@@ -132,20 +132,28 @@ class OrderManager:
 
             # Send fill notification.
             if self._notifier:
-                asyncio.ensure_future(self._notifier.filled(
+                _t = asyncio.create_task(self._notifier.filled(
                     symbol=plan.symbol,
                     side="BUY",
                     qty=order.filled_qty,
                     fill_price=order.avg_fill_price,
                     order_id=order.order_id,
                 ))
+                _t.add_done_callback(
+                    lambda t: log.error("notifier.filled failed", error=str(t.exception()))
+                    if t.done() and not t.cancelled() and t.exception() else None
+                )
 
             log.info(
                 "order filled — starting stop monitor",
                 order_id=order.order_id,
                 fill_price=order.avg_fill_price,
             )
-            asyncio.ensure_future(self._monitor_stop(order, plan, option_symbol))
+            _m = asyncio.create_task(self._monitor_stop(order, plan, option_symbol))
+            _m.add_done_callback(
+                lambda t: log.error("_monitor_stop failed", error=str(t.exception()))
+                if t.done() and not t.cancelled() and t.exception() else None
+            )
         else:
             self._open_orders[order.order_id] = signal
 
@@ -210,7 +218,14 @@ class OrderManager:
                         quantity=entry_order.filled_qty,
                         limit_price=round(mid * 0.99, 2),
                     )
-                    pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
+                    if exit_order.status != OrderStatus.FILLED:
+                        log.warning("exit order not filled — skipping P&L record",
+                                    option_symbol=option_symbol, status=exit_order.status)
+                        return
+                    if plan.direction == SignalDirection.PUT:
+                        pnl = (entry_fill - exit_order.avg_fill_price) * entry_order.filled_qty * 100
+                    else:
+                        pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
                     self._risk.register_close(option_symbol)
                     pnl_sign = "+" if pnl >= 0 else ""
                     self._record_action(
@@ -226,13 +241,17 @@ class OrderManager:
                         self._position_store.remove_position(option_symbol)
 
                     if self._notifier:
-                        asyncio.ensure_future(self._notifier.closed(
+                        _n = asyncio.create_task(self._notifier.closed(
                             symbol=plan.symbol,
                             reason=exit_reason,
                             entry=entry_fill,
                             exit_price=exit_order.avg_fill_price,
                             pnl=pnl,
                         ))
+                        _n.add_done_callback(
+                            lambda t: log.error("notifier.closed failed", error=str(t.exception()))
+                            if t.done() and not t.cancelled() and t.exception() else None
+                        )
 
                     log.info(
                         "position closed",
@@ -306,7 +325,13 @@ class OrderManager:
                     avg_fill_price=pos["entry_price"],
                 )
                 self._risk.register_open(option_symbol)
-                asyncio.ensure_future(self._monitor_stop(entry_order, plan, option_symbol))
+                if self._position_store:
+                    self._position_store.set_cooldown(plan.symbol)
+                _r = asyncio.create_task(self._monitor_stop(entry_order, plan, option_symbol))
+                _r.add_done_callback(
+                    lambda t: log.error("_monitor_stop (recovery) failed", error=str(t.exception()))
+                    if t.done() and not t.cancelled() and t.exception() else None
+                )
                 log.info("recovered position — stop monitor re-armed", option_symbol=option_symbol)
             except Exception as exc:
                 log.warning(

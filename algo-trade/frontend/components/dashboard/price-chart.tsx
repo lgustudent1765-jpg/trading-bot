@@ -63,7 +63,10 @@ export function PriceChart() {
     try {
       const [rangeStr, interval] = RANGE_PARAMS[range];
       const res = await api.quote(symbol, rangeStr, interval);
-      if (res.bars.length === 0) {
+      if (!res?.bars) {
+        setError(`No data returned for ${symbol}`);
+        setChartData([]);
+      } else if (res.bars.length === 0) {
         setError(`No data returned for ${symbol}`);
         setChartData([]);
       } else {

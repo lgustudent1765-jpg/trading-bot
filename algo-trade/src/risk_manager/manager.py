@@ -15,7 +15,7 @@ Stop-loss and take-profit levels are verified to be consistent (not inverted).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from src.events import SignalDirection, TradePlan
 from src.logger import get_logger
@@ -83,7 +83,7 @@ class RiskManager:
         )
         return True
 
-    def approve(self, plan: TradePlan, equity: float) -> tuple[bool, str]:
+    def approve(self, plan: TradePlan, equity: float) -> Tuple[bool, str]:
         """
         Validate and size a TradePlan.
 
