@@ -208,7 +208,10 @@ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     global _CONFIG
     if _CONFIG is None:
         _CONFIG = load_config()
-    _CONFIG = deep_merge(_CONFIG, updates)
+    merged = deep_merge(_CONFIG, updates)
+    # Update in-place so existing references (e.g. RiskManager._config) see the change.
+    _CONFIG.clear()
+    _CONFIG.update(merged)
     # Persist to disk so settings survive restarts
     write_path = _LOADED_PATH or _CONFIG_PATH
     try:
