@@ -51,7 +51,7 @@ options_filter:
   min_open_interest: 500
   min_volume: 100
 risk:
-  max_open_positions: 5
+  max_open_positions: 20
   max_position_pct: 0.05
   pdt_equity_threshold: 25000
   stop_loss_atr_mult: 1.5

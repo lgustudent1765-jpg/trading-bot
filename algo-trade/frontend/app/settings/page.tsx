@@ -473,6 +473,8 @@ export default function SettingsPage() {
             saved={saved.notify}
             onSave={() => save("notify", {
               notify_email_enabled:    cfg.notify_email_enabled,
+              notify_email_provider:   cfg.notify_email_provider,
+              notify_email_api_key:    cfg.notify_email_api_key,
               notify_email_smtp_host:  cfg.notify_email_smtp_host,
               notify_email_smtp_port:  cfg.notify_email_smtp_port,
               notify_email_username:   cfg.notify_email_username,
@@ -492,21 +494,16 @@ export default function SettingsPage() {
           />
           {cfg.notify_email_enabled && (
             <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="SMTP Host"
-                type="text"
-                placeholder="smtp.gmail.com"
-                value={cfg.notify_email_smtp_host ?? ""}
-                onChange={(e) => set("notify_email_smtp_host", e.target.value)}
-              />
-              <Input
-                label="SMTP Port"
-                type="number"
-                min={1}
-                max={65535}
-                placeholder="587"
-                value={cfg.notify_email_smtp_port ?? 587}
-                onChange={(e) => set("notify_email_smtp_port", Number(e.target.value))}
+              <SelectField
+                label="Email Provider"
+                value={cfg.notify_email_provider ?? "smtp"}
+                options={[
+                  { value: "smtp",      label: "SMTP (Gmail etc.)" },
+                  { value: "brevo",     label: "Brevo (API)" },
+                  { value: "sendgrid",  label: "SendGrid (API)" },
+                  { value: "resend",    label: "Resend (API)" },
+                ]}
+                onChange={(v) => set("notify_email_provider", v)}
               />
               <Input
                 label="Sender Email"
@@ -515,13 +512,41 @@ export default function SettingsPage() {
                 value={cfg.notify_email_username ?? ""}
                 onChange={(e) => set("notify_email_username", e.target.value)}
               />
-              <Input
-                label="App Password"
-                type="password"
-                placeholder={cfg.notify_email_password_set ? "••••••••  (already set)" : "Enter app password…"}
-                value={cfg.notify_email_password ?? ""}
-                onChange={(e) => set("notify_email_password", e.target.value)}
-              />
+              {(cfg.notify_email_provider ?? "smtp") !== "smtp" ? (
+                <Input
+                  label="API Key"
+                  type="password"
+                  placeholder={cfg.notify_email_api_key_set ? "••••••••  (already set)" : "Enter API key…"}
+                  value={cfg.notify_email_api_key ?? ""}
+                  onChange={(e) => set("notify_email_api_key", e.target.value)}
+                />
+              ) : (
+                <>
+                  <Input
+                    label="SMTP Host"
+                    type="text"
+                    placeholder="smtp.gmail.com"
+                    value={cfg.notify_email_smtp_host ?? ""}
+                    onChange={(e) => set("notify_email_smtp_host", e.target.value)}
+                  />
+                  <Input
+                    label="SMTP Port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    placeholder="587"
+                    value={cfg.notify_email_smtp_port ?? 587}
+                    onChange={(e) => set("notify_email_smtp_port", Number(e.target.value))}
+                  />
+                  <Input
+                    label="App Password"
+                    type="password"
+                    placeholder={cfg.notify_email_password_set ? "••••••••  (already set)" : "Enter app password…"}
+                    value={cfg.notify_email_password ?? ""}
+                    onChange={(e) => set("notify_email_password", e.target.value)}
+                  />
+                </>
+              )}
               <Input
                 label="Recipient Email"
                 type="email"

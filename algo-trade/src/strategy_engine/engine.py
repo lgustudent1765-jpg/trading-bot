@@ -48,10 +48,12 @@ class StrategyEngine:
         config: Dict[str, Any],
         position_store=None,
         notifier=None,
+        tap_queue: "Optional[asyncio.Queue[SignalEvent]]" = None,
     ) -> None:
         self._market = market_adapter
         self._chain_queue = chain_queue
         self._signal_queue = signal_queue
+        self._tap_queue = tap_queue
         self._position_store = position_store
         self._notifier = notifier
 
@@ -165,6 +167,11 @@ class StrategyEngine:
         plan = self._build_trade_plan(symbol, direction, contract, atr_val, rsi_val, macd_res.histogram)
         signal = SignalEvent(trade_plan=plan)
         await self._signal_queue.put(signal)
+        if self._tap_queue is not None:
+            try:
+                self._tap_queue.put_nowait(signal)
+            except asyncio.QueueFull:
+                log.debug("tap_queue full — signal observation skipped", symbol=symbol)
 
         # Record cooldown and send alert.
         if self._position_store:

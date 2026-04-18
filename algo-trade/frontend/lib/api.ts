@@ -1,5 +1,5 @@
 // Backend API client — all requests go through Next.js proxy at /api/*
-// which rewrites to http://localhost:8080/* (configured in next.config.ts)
+// which rewrites to http://localhost:8181/* (configured in next.config.ts)
 
 const API_BASE = "/api";
 
@@ -73,6 +73,9 @@ export interface ConfigPayload {
   risk_stop_loss_atr_mult?: number;
   risk_take_profit_atr_mult?: number;
   notify_email_enabled?: boolean;
+  notify_email_provider?: string;
+  notify_email_api_key?: string;
+  notify_email_api_key_set?: boolean;
   notify_email_smtp_host?: string;
   notify_email_smtp_port?: number;
   notify_email_username?: string;

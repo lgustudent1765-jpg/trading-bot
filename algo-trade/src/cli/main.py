@@ -98,12 +98,13 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
     candidate_queue: asyncio.Queue = asyncio.Queue(maxsize=20)
     chain_queue:     asyncio.Queue = asyncio.Queue(maxsize=50)
     signal_queue:    asyncio.Queue = asyncio.Queue(maxsize=20)
+    tap_queue:       asyncio.Queue = asyncio.Queue(maxsize=50)
 
     screener   = Screener(market_adapter, candidate_queue, config)
     fetcher    = OptionsFetcher(broker_adapter, candidate_queue, chain_queue, config)
     engine     = StrategyEngine(
         market_adapter, chain_queue, signal_queue, config,
-        position_store=position_store, notifier=notifier,
+        position_store=position_store, notifier=notifier, tap_queue=tap_queue,
     )
     order_mgr  = OrderManager(
         broker_adapter, risk_manager, signal_queue, mode, config,
@@ -111,11 +112,14 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
         action_store=_action_store, market_adapter=market_adapter,
     )
 
-    # Signal tap: copy signals to the API signal_store.
+    # Re-arm stop monitors for positions that survived a restart.
+    await order_mgr.recover_open_positions()
+
+    # Signal tap: observe signals on the dedicated tap_queue (separate from order manager).
     async def _signal_tap() -> None:
         while True:
             try:
-                sig: SignalEvent = await asyncio.wait_for(signal_queue.get(), timeout=1.0)
+                sig: SignalEvent = await asyncio.wait_for(tap_queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -134,13 +138,9 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
                 "ts":        sig.timestamp.isoformat(),
             }
             _signal_store.append(data)
-            position_store.add_signal(data) # Persist to DB
+            position_store.add_signal(data)  # Persist to DB
             if len(_signal_store) > 200:
                 _signal_store.pop(0)
-            try:
-                signal_queue.put_nowait(sig)  # pass on to order manager
-            except asyncio.QueueFull:
-                log.warning("signal_queue full — dropping signal", symbol=plan.symbol)
 
     api_cfg = config.get("api_server", {})
     app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store)

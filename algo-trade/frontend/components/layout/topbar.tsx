@@ -46,6 +46,7 @@ function signalToNotif(s: Signal): NotifEntry {
 interface TopbarProps {
   masked: boolean;
   onToggleMask: () => void;
+  title?: string;
 }
 
 export function Topbar({ masked, onToggleMask }: TopbarProps) {
