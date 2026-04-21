@@ -196,6 +196,8 @@ export interface StatusResponse {
   open_positions: number;
   signal_count: number;
   action_count: number;
+  // paper trading starting capital
+  paper_capital: number;
   // p&l
   total_pnl: number;
   trade_count: number;

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Eye, EyeOff, Bell, ChevronDown, Circle, Database, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
-import { api, type Signal } from "@/lib/api";
+import { api, type Signal, type StatusResponse } from "@/lib/api";
 
 const PAGE_META: Record<string, { title: string; description: string }> = {
   "/dashboard":  { title: "Dashboard",   description: "Your portfolio overview and live market data" },
@@ -56,6 +56,7 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
   const [dbConnected, setDbConnected] = useState(true);
   const [marketOpen, setMarketOpen]   = useState(false);
   const [isDemo, setIsDemo]           = useState(false);
+  const [balance, setBalance]         = useState<number | null>(null);
   const pathname = usePathname() ?? "";
   const panelRef  = useRef<HTMLDivElement>(null);
   const seenRef   = useRef<Set<string>>(new Set());
@@ -83,13 +84,16 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
     }
   }, [notifOpen]);
 
-  // ── Health poll ──────────────────────────────────────────────────────────
+  // ── Health + balance poll ─────────────────────────────────────────────────
   const pollHealth = useCallback(async () => {
     try {
-      const h = await api.health();
+      const [h, s] = await Promise.all([api.health(), api.status()]);
       setIsDemo(h.broker === "mock");
       setDbConnected(h.database_connected);
       setMarketOpen(h.market_open);
+      const capital = s.paper_capital ?? 100;
+      const pnl     = s.total_pnl     ?? 0;
+      setBalance(capital + pnl);
     } catch {
       setDbConnected(false);
     }
@@ -188,7 +192,7 @@ export function Topbar({ masked, onToggleMask }: TopbarProps) {
         >
           <span className="text-xs text-zinc-400">Balance</span>
           <span className="text-sm font-medium text-zinc-100 tabular-nums">
-            {formatCurrency(124_850.32, { masked })}
+            {balance === null ? "—" : formatCurrency(balance, { masked })}
           </span>
           <span className="text-zinc-500 group-hover:text-zinc-300 transition-colors">
             {masked ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}

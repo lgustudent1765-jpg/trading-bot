@@ -131,6 +131,7 @@ def create_app(
             "total_pnl": 0.0, "trade_count": 0, "win_count": 0, "loss_count": 0,
             "win_rate": 0.0, "avg_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
         }
+        paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 100.0))
         return web.json_response({
             # system
             "uptime_s":          round(time.time() - _START_TIME, 1),
@@ -143,6 +144,8 @@ def create_app(
             "open_positions":    open_count,
             "signal_count":      len(signal_store),
             "action_count":      len(_action_store),
+            # paper trading capital
+            "paper_capital":     paper_capital,
             # p&l
             **pnl,
             # recent activity (newest first)
