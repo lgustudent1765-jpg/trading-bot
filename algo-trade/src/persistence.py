@@ -57,6 +57,18 @@ class SignalRecord(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class StrategyPerformanceRecord(Base):
+    """Tracks per-strategy win/loss and P&L for the selection algorithm."""
+    __tablename__ = "strategy_performance"
+
+    strategy_name = Column(String, primary_key=True)
+    trades        = Column(Integer, default=0)
+    wins          = Column(Integer, default=0)
+    losses        = Column(Integer, default=0)
+    total_pnl     = Column(Float, default=0.0)
+    last_updated  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class ActionRecord(Base):
     """Stores program activity events (fills, closes, rejections, system events)."""
     __tablename__ = "actions"
@@ -303,6 +315,47 @@ class PositionStore:
             "best_trade":   round(max(pnls), 2) if pnls else 0.0,
             "worst_trade":  round(min(pnls), 2) if pnls else 0.0,
         }
+
+    # ------------------------------------------------------------------ #
+    # Strategy performance tracking                                        #
+    # ------------------------------------------------------------------ #
+
+    def record_strategy_result(self, strategy_name: str, pnl: float) -> None:
+        """Upsert strategy performance after a trade closes."""
+        if not strategy_name:
+            return
+        with self.SessionLocal() as session:
+            rec = session.query(StrategyPerformanceRecord).filter_by(
+                strategy_name=strategy_name
+            ).first()
+            if rec is None:
+                rec = StrategyPerformanceRecord(
+                    strategy_name=strategy_name, trades=0, wins=0, losses=0, total_pnl=0.0
+                )
+                session.add(rec)
+            rec.trades += 1
+            if pnl >= 0:
+                rec.wins += 1
+            else:
+                rec.losses += 1
+            rec.total_pnl += pnl
+            rec.last_updated = datetime.now(timezone.utc)
+            session.commit()
+
+    def get_strategy_scores(self) -> Dict[str, Dict[str, Any]]:
+        """Return per-strategy stats for the selection algorithm."""
+        with self.SessionLocal() as session:
+            records = session.query(StrategyPerformanceRecord).all()
+            return {
+                r.strategy_name: {
+                    "trades":    r.trades,
+                    "wins":      r.wins,
+                    "losses":    r.losses,
+                    "total_pnl": round(r.total_pnl, 2),
+                    "win_rate":  round(r.wins / r.trades, 3) if r.trades else 0.0,
+                }
+                for r in records
+            }
 
     def get_actions(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.SessionLocal() as session:

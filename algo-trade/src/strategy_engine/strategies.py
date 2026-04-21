@@ -1,0 +1,517 @@
+# file: src/strategy_engine/strategies.py
+"""
+10 trading strategies implementing BaseStrategy.
+
+Each strategy independently evaluates market data and returns an Optional[TradePlan].
+Helper indicator functions are defined inline to avoid extra module dependencies.
+"""
+
+from __future__ import annotations
+
+import abc
+from typing import Any, Dict, List, Optional, Sequence
+
+import numpy as np
+
+from src.events import OptionContract, SignalDirection, TradePlan
+from src.indicators import atr, macd, rsi
+
+
+# ── Inline indicator helpers ─────────────────────────────────────────────────
+
+
+def _sma(closes: Sequence[float], period: int) -> float:
+    arr = np.asarray(closes[-period:], dtype=float)
+    return float(arr.mean())
+
+
+def _ema_series(arr: np.ndarray, span: int) -> np.ndarray:
+    alpha = 2.0 / (span + 1)
+    out = np.empty_like(arr, dtype=float)
+    out[0] = arr[0]
+    for i in range(1, len(arr)):
+        out[i] = alpha * arr[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
+def _bollinger(closes: Sequence[float], period: int = 20, num_std: float = 2.0):
+    """Return (upper, mid, lower) Bollinger Bands for the last bar."""
+    arr = np.asarray(closes[-period:], dtype=float)
+    mid = float(arr.mean())
+    std = float(arr.std())
+    return mid + num_std * std, mid, mid - num_std * std
+
+
+def _vwap(bars: List[Dict]) -> float:
+    """Volume-weighted average price across all provided bars."""
+    num = sum((b["high"] + b["low"] + b["close"]) / 3.0 * b.get("volume", 1) for b in bars)
+    den = sum(b.get("volume", 1) for b in bars)
+    return num / den if den else 0.0
+
+
+def _select_contract(
+    contracts: List[OptionContract], direction: SignalDirection
+) -> Optional[OptionContract]:
+    opt_type = "call" if direction == SignalDirection.CALL else "put"
+    candidates = [c for c in contracts if c.option_type == opt_type]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (abs(c.strike - c.underlying_price), -c.volume))
+    return candidates[0]
+
+
+def _build_plan(
+    name: str,
+    symbol: str,
+    direction: SignalDirection,
+    contract: OptionContract,
+    atr_val: float,
+    sl_mult: float,
+    tp_mult: float,
+    rationale: str,
+) -> TradePlan:
+    entry = round(contract.ask * 1.01, 2)
+    if direction == SignalDirection.CALL:
+        stop = round(entry - atr_val * sl_mult, 2)
+        tp   = round(entry + atr_val * tp_mult, 2)
+    else:
+        stop = round(entry + atr_val * sl_mult, 2)
+        tp   = round(entry - atr_val * tp_mult, 2)
+    return TradePlan(
+        symbol=symbol,
+        direction=direction,
+        contract=contract,
+        entry_limit=entry,
+        stop_loss=stop,
+        take_profit=tp,
+        rationale=rationale,
+        strategy_name=name,
+    )
+
+
+# ── Base class ───────────────────────────────────────────────────────────────
+
+
+class BaseStrategy(abc.ABC):
+    name: str = "base"
+
+    @abc.abstractmethod
+    def generate_signal(
+        self,
+        symbol: str,
+        bars: List[Dict[str, Any]],
+        contracts: List[OptionContract],
+        config: Dict[str, Any],
+    ) -> Optional[TradePlan]:
+        """Evaluate bars + contracts; return a TradePlan or None."""
+
+
+# ── Strategy 1: RSI + MACD ───────────────────────────────────────────────────
+
+
+class RSIMACDStrategy(BaseStrategy):
+    name = "RSIMACD"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        ind = config.get("indicators", {})
+        risk = config.get("risk", {})
+        rsi_period = int(ind.get("rsi_period", 14))
+        rsi_ob     = float(ind.get("rsi_overbought", 70))
+        rsi_os     = float(ind.get("rsi_oversold", 30))
+        macd_fast  = int(ind.get("macd_fast", 12))
+        macd_slow  = int(ind.get("macd_slow", 26))
+        macd_sig   = int(ind.get("macd_signal", 9))
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        required = max(rsi_period + 1, macd_slow + macd_sig, atr_period + 1)
+        if len(closes) < required:
+            return None
+
+        rsi_val  = rsi(closes, rsi_period)
+        macd_res = macd(closes, macd_fast, macd_slow, macd_sig)
+        atr_val  = atr(highs, lows, closes, atr_period)
+
+        if rsi_val > rsi_ob and macd_res.histogram > 0:
+            direction = SignalDirection.CALL
+        elif rsi_val < rsi_os and macd_res.histogram < 0:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] RSI={rsi_val:.1f}, MACD_hist={macd_res.histogram:.4f}"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 2: EMA Crossover ─────────────────────────────────────────────────
+
+
+class EMACrossStrategy(BaseStrategy):
+    name = "EMACross"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = np.asarray([b["close"] for b in bars], dtype=float)
+        highs  = [b["high"] for b in bars]
+        lows   = [b["low"]  for b in bars]
+        if len(closes) < max(22, atr_period + 1):
+            return None
+
+        ema9  = _ema_series(closes, 9)
+        ema21 = _ema_series(closes, 21)
+
+        if ema9[-2] < ema21[-2] and ema9[-1] > ema21[-1]:
+            direction = SignalDirection.CALL
+        elif ema9[-2] > ema21[-2] and ema9[-1] < ema21[-1]:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, list(closes), atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] EMA9={ema9[-1]:.2f} crossed EMA21={ema21[-1]:.2f}"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 3: Bollinger Band Breakout ───────────────────────────────────────
+
+
+class BollingerBandBreakoutStrategy(BaseStrategy):
+    name = "BollingerBreakout"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < max(21, atr_period + 1):
+            return None
+
+        upper, _mid, lower = _bollinger(closes, period=20)
+        last_close = closes[-1]
+        prev_close = closes[-2]
+
+        if prev_close <= upper and last_close > upper:
+            direction = SignalDirection.CALL
+        elif prev_close >= lower and last_close < lower:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = (f"[{self.name}] price={last_close:.2f} "
+                     f"broke band upper={upper:.2f} lower={lower:.2f}")
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 4: Momentum ──────────────────────────────────────────────────────
+
+
+class MomentumStrategy(BaseStrategy):
+    name = "Momentum"
+    _LOOKBACK = 5
+    _THRESHOLD_PCT = 0.005  # 0.5%
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < self._LOOKBACK + atr_period + 1:
+            return None
+
+        change = (closes[-1] - closes[-self._LOOKBACK]) / closes[-self._LOOKBACK]
+        if change > self._THRESHOLD_PCT:
+            direction = SignalDirection.CALL
+        elif change < -self._THRESHOLD_PCT:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] {self._LOOKBACK}-bar change={change*100:.2f}%"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 5: Mean Reversion ────────────────────────────────────────────────
+
+
+class MeanReversionStrategy(BaseStrategy):
+    name = "MeanReversion"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < max(22, atr_period + 1):
+            return None
+
+        arr = np.asarray(closes[-20:], dtype=float)
+        sma = float(arr.mean())
+        std = float(arr.std())
+        if std == 0:
+            return None
+
+        z = (closes[-1] - sma) / std
+        # Price far above mean → expect drop → PUT; far below → CALL
+        if z > 2.0:
+            direction = SignalDirection.PUT
+        elif z < -2.0:
+            direction = SignalDirection.CALL
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] z-score={z:.2f}, SMA20={sma:.2f}"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 6: VWAP Deviation ────────────────────────────────────────────────
+
+
+class VWAPStrategy(BaseStrategy):
+    name = "VWAP"
+    _THRESHOLD_PCT = 0.003  # 0.3% from VWAP
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < atr_period + 1:
+            return None
+
+        vwap_val = _vwap(bars)
+        if vwap_val == 0:
+            return None
+        deviation = (closes[-1] - vwap_val) / vwap_val
+
+        if deviation > self._THRESHOLD_PCT:
+            direction = SignalDirection.CALL
+        elif deviation < -self._THRESHOLD_PCT:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] VWAP={vwap_val:.2f}, deviation={deviation*100:.2f}%"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 7: RSI Aggressive ───────────────────────────────────────────────
+
+
+class RSIAggressiveStrategy(BaseStrategy):
+    name = "RSIAggressive"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        rsi_period = int(ind.get("rsi_period", 14))
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < max(rsi_period + 1, atr_period + 1):
+            return None
+
+        rsi_val = rsi(closes, rsi_period)
+        if rsi_val > 80:
+            direction = SignalDirection.CALL
+        elif rsi_val < 20:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = f"[{self.name}] RSI={rsi_val:.1f} (thresholds 80/20)"
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 8: Trend Following ───────────────────────────────────────────────
+
+
+class TrendFollowingStrategy(BaseStrategy):
+    name = "TrendFollowing"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        rsi_period = int(ind.get("rsi_period", 14))
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < max(51, rsi_period + 1, atr_period + 1):
+            return None
+
+        sma20   = _sma(closes, 20)
+        sma50   = _sma(closes, 50)
+        rsi_val = rsi(closes, rsi_period)
+
+        if sma20 > sma50 and rsi_val > 50:
+            direction = SignalDirection.CALL
+        elif sma20 < sma50 and rsi_val < 50:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, closes, atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = (f"[{self.name}] SMA20={sma20:.2f} vs SMA50={sma50:.2f}, "
+                     f"RSI={rsi_val:.1f}")
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 9: Volatility Breakout ──────────────────────────────────────────
+
+
+class VolatilityBreakoutStrategy(BaseStrategy):
+    name = "VolatilityBreakout"
+    _ATR_MULT = 2.0
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = [b["close"] for b in bars]
+        highs  = [b["high"]  for b in bars]
+        lows   = [b["low"]   for b in bars]
+        if len(closes) < atr_period + 2:
+            return None
+
+        atr_val    = atr(highs, lows, closes, atr_period)
+        last_range = highs[-1] - lows[-1]
+        last_move  = closes[-1] - closes[-2]
+
+        if last_range < self._ATR_MULT * atr_val:
+            return None
+
+        direction = SignalDirection.CALL if last_move > 0 else SignalDirection.PUT
+        contract  = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = (f"[{self.name}] range={last_range:.2f} "
+                     f"> {self._ATR_MULT}×ATR={atr_val:.2f}")
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Strategy 10: MACD Line Crossover ─────────────────────────────────────────
+
+
+class MACDCrossStrategy(BaseStrategy):
+    name = "MACDCross"
+
+    def generate_signal(self, symbol, bars, contracts, config):
+        risk = config.get("risk", {})
+        ind  = config.get("indicators", {})
+        macd_fast  = int(ind.get("macd_fast", 12))
+        macd_slow  = int(ind.get("macd_slow", 26))
+        macd_sig   = int(ind.get("macd_signal", 9))
+        atr_period = int(ind.get("atr_period", 14))
+        sl_mult    = float(risk.get("stop_loss_atr_mult", 1.5))
+        tp_mult    = float(risk.get("take_profit_atr_mult", 3.0))
+
+        closes = np.asarray([b["close"] for b in bars], dtype=float)
+        highs  = [b["high"] for b in bars]
+        lows   = [b["low"]  for b in bars]
+        required = macd_slow + macd_sig + 1
+        if len(closes) < max(required, atr_period + 1):
+            return None
+
+        fast_ema  = _ema_series(closes, macd_fast)
+        slow_ema  = _ema_series(closes, macd_slow)
+        macd_line = fast_ema - slow_ema
+        sig_line  = _ema_series(macd_line, macd_sig)
+
+        if macd_line[-2] < sig_line[-2] and macd_line[-1] > sig_line[-1]:
+            direction = SignalDirection.CALL
+        elif macd_line[-2] > sig_line[-2] and macd_line[-1] < sig_line[-1]:
+            direction = SignalDirection.PUT
+        else:
+            return None
+
+        atr_val  = atr(highs, lows, list(closes), atr_period)
+        contract = _select_contract(contracts, direction)
+        if contract is None:
+            return None
+        rationale = (f"[{self.name}] MACD={macd_line[-1]:.4f} "
+                     f"crossed signal={sig_line[-1]:.4f}")
+        return _build_plan(self.name, symbol, direction, contract, atr_val, sl_mult, tp_mult, rationale)
+
+
+# ── Registry ──────────────────────────────────────────────────────────────────
+
+ALL_STRATEGIES: List[BaseStrategy] = [
+    RSIMACDStrategy(),
+    EMACrossStrategy(),
+    BollingerBandBreakoutStrategy(),
+    MomentumStrategy(),
+    MeanReversionStrategy(),
+    VWAPStrategy(),
+    RSIAggressiveStrategy(),
+    TrendFollowingStrategy(),
+    VolatilityBreakoutStrategy(),
+    MACDCrossStrategy(),
+]

@@ -168,6 +168,9 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
         "database": {
             "url": os.getenv("DATABASE_URL", "sqlite:///data/algo_trade.db"),
         },
+        "paper_trading": {
+            "initial_capital": float(os.getenv("PAPER_CAPITAL", "100")),
+        },
         "notifications": {
             "email": {
                 "enabled":   False,

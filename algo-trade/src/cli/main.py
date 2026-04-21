@@ -30,7 +30,7 @@ from src.options_fetcher import OptionsFetcher
 from src.persistence import PositionStore
 from src.risk_manager import RiskManager
 from src.screener import Screener
-from src.strategy_engine import StrategyEngine
+from src.strategy_engine import MultiStrategyEngine
 
 log = get_logger(__name__)
 
@@ -102,7 +102,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
 
     screener   = Screener(market_adapter, candidate_queue, config)
     fetcher    = OptionsFetcher(broker_adapter, candidate_queue, chain_queue, config)
-    engine     = StrategyEngine(
+    engine     = MultiStrategyEngine(
         market_adapter, chain_queue, signal_queue, config,
         position_store=position_store, notifier=notifier, tap_queue=tap_queue,
     )

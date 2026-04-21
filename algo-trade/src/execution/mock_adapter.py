@@ -26,7 +26,7 @@ from src.logger import get_logger
 
 log = get_logger(__name__)
 
-_EQUITY = 100_000.0
+_EQUITY = 100.0
 _NEUTRAL_SPOT = 150.0  # baseline underlying price used for delta-based option pricing
 
 
@@ -71,7 +71,11 @@ def _make_chain(symbol: str, spot: float = 150.0) -> List[OptionContract]:
 class MockBrokerAdapter(BrokerAdapter):
     """In-memory broker adapter; no network access."""
 
-    def __init__(self, equity: float = _EQUITY) -> None:
+    def __init__(self, equity: float = _EQUITY, config: dict = None) -> None:
+        if config is not None:
+            equity = float(
+                config.get("paper_trading", {}).get("initial_capital", equity)
+            )
         self._equity = equity
         self._orders: Dict[str, OrderEvent] = {}
         # Tracks per-symbol cumulative price drift so the stop monitor sees

@@ -228,17 +228,19 @@ class OrderManager:
                         pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
                     self._risk.register_close(option_symbol)
                     pnl_sign = "+" if pnl >= 0 else ""
+                    strategy_name = getattr(plan, "strategy_name", "")
                     self._record_action(
                         "POSITION_CLOSED", plan.symbol,
                         f"{exit_reason}: SELL {option_symbol} @ ${exit_order.avg_fill_price:.2f} "
                         f"(P&L: {pnl_sign}${pnl:.2f})",
                         {"option_symbol": option_symbol, "reason": exit_reason,
                          "entry": entry_fill, "exit": exit_order.avg_fill_price,
-                         "pnl": round(pnl, 2)},
+                         "pnl": round(pnl, 2), "strategy": strategy_name},
                     )
 
                     if self._position_store:
                         self._position_store.remove_position(option_symbol)
+                        self._position_store.record_strategy_result(strategy_name, pnl)
 
                     if self._notifier:
                         _n = asyncio.create_task(self._notifier.closed(

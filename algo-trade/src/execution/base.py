@@ -83,4 +83,4 @@ def create_broker_adapter(config: Dict[str, Any]) -> BrokerAdapter:
         from src.execution.webull_adapter import WebullAdapter
         return WebullAdapter(config)
     from src.execution.mock_adapter import MockBrokerAdapter
-    return MockBrokerAdapter()
+    return MockBrokerAdapter(config=config)

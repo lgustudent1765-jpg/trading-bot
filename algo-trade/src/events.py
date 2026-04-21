@@ -105,6 +105,7 @@ class TradePlan:
     rsi: float = 0.0
     macd_hist: float = 0.0
     rationale: str = ""
+    strategy_name: str = ""
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
