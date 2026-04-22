@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle } from "lucide-react";
+import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle, AlertTriangle, Trash2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, type ConfigPayload } from "@/lib/api";
@@ -156,6 +156,9 @@ export default function SettingsPage() {
   const [saved,  setSaved]  = useState<SavedState>({ broker: false, market: false, risk: false, notify: false });
   const [testingEmail, setTestingEmail] = useState(false);
   const [testResult,   setTestResult]   = useState<{ ok: boolean; message: string } | null>(null);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resetting,    setResetting]    = useState(false);
+  const [resetResult,  setResetResult]  = useState<{ ok: boolean; message: string } | null>(null);
 
   // Track last values fetched from server to detect user-edited fields
   const serverCfgRef = useRef<ConfigPayload>({});
@@ -237,6 +240,25 @@ export default function SettingsPage() {
       setSaveError("Save failed — check that the backend is running.");
     } finally {
       setSaving((s) => ({ ...s, [section]: false }));
+    }
+  }
+
+  async function resetPaperTrading() {
+    setResetting(true);
+    setResetResult(null);
+    try {
+      const res = await api.reset();
+      if (res.ok) {
+        setResetResult({ ok: true, message: "Reset complete. All positions, signals, and P&L have been cleared." });
+        setResetConfirm(false);
+      } else {
+        setResetResult({ ok: false, message: res.error ?? "Reset failed." });
+      }
+    } catch {
+      setResetResult({ ok: false, message: "Cannot reach backend." });
+    } finally {
+      setResetting(false);
+      setTimeout(() => setResetResult(null), 8000);
     }
   }
 
@@ -604,6 +626,74 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Paper Trading Reset ── */}
+      <Card className="border-red-900/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold text-red-400">
+            <AlertTriangle className="w-4 h-4" />
+            Reset Paper Trading
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            Wipes <strong className="text-zinc-200">all mock trading data</strong>: open positions,
+            signals, strategy performance scores, and activity log. Your balance resets to the
+            configured starting capital. This only affects the mock broker — real broker accounts
+            are never touched.
+          </p>
+
+          {resetResult && (
+            <div className={cn(
+              "flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs border",
+              resetResult.ok
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-red-500/10 border-red-500/30 text-red-300"
+            )}>
+              {resetResult.ok
+                ? <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                : <XCircle    className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              }
+              <span className="leading-relaxed">{resetResult.message}</span>
+            </div>
+          )}
+
+          {!resetConfirm ? (
+            <button
+              onClick={() => setResetConfirm(true)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors bg-red-500/10 border-red-500/30 text-red-300 hover:bg-red-500/20"
+            >
+              <Trash2 className="w-3 h-3" />
+              Reset Mock Trading Data
+            </button>
+          ) : (
+            <div className="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3">
+              <p className="text-xs text-red-300 flex-1">
+                Are you sure? This cannot be undone.
+              </p>
+              <button
+                onClick={() => setResetConfirm(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={resetPaperTrading}
+                disabled={resetting}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  resetting
+                    ? "opacity-50 cursor-not-allowed bg-zinc-800 border-zinc-700 text-zinc-400"
+                    : "bg-red-500/20 border-red-500/40 text-red-300 hover:bg-red-500/30"
+                )}
+              >
+                {resetting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                {resetting ? "Resetting…" : "Yes, Reset"}
+              </button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

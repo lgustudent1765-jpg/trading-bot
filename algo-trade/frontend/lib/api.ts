@@ -55,6 +55,7 @@ export interface Signal {
   target: number;
   size: number;
   rationale: string;
+  strategy?: string;
   ts: string;
 }
 
@@ -123,6 +124,9 @@ export const api = {
   testEmail:    ()                        => fetch(`${API_BASE}/config/test-email`, {
     method: "POST",
   }).then((r) => r.json() as Promise<{ ok?: boolean; recipient?: string; error?: string }>),
+  reset:        ()                        => fetch(`${API_BASE}/reset`, {
+    method: "POST",
+  }).then((r) => r.json() as Promise<{ ok?: boolean; error?: string }>),
 };
 
 export interface MarketMover {
@@ -154,16 +158,24 @@ export interface QuoteResponse {
   bars: PriceBar[];
 }
 
-export interface StrategiesResponse {
-  strategy: string;
+export interface StrategyStats {
+  name: string;
   description: string;
+  signals: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+}
+
+export interface StrategiesResponse {
   is_active: boolean;
   total_signals: number;
   call_signals: number;
   put_signals: number;
   symbols_traded: string[];
-  /** Win rate across all tracked trades (0–1). Optional — may not always be present. */
-  trades_win_rate?: number;
+  strategies: StrategyStats[];
 }
 
 export interface BacktestRequest {

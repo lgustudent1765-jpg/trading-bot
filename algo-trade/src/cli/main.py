@@ -135,6 +135,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
                 "target":    plan.take_profit,
                 "size":      plan.position_size,
                 "rationale": plan.rationale,
+                "strategy":  plan.strategy_name,
                 "ts":        sig.timestamp.isoformat(),
             }
             _signal_store.append(data)

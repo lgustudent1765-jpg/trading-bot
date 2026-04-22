@@ -643,25 +643,100 @@ def create_app(
             log.error("quote endpoint failed", symbol=symbol, error=str(exc))
             return web.json_response({"error": "failed to fetch quote"}, status=503)
 
+    _STRATEGY_META = [
+        ("RSIMACD",            "RSI overbought/oversold + MACD histogram direction"),
+        ("EMACross",           "EMA 9 crosses above/below EMA 21"),
+        ("BollingerBreakout",  "Price breaks outside Bollinger Bands (20-period, 2σ)"),
+        ("Momentum",           "5-bar price change exceeds 0.5% threshold"),
+        ("MeanReversion",      "Price > 2σ from SMA20 — fade the extreme"),
+        ("VWAP",               "Price deviates > 0.3% from VWAP intraday"),
+        ("RSIAggressive",      "Pure RSI with aggressive thresholds (80 / 20)"),
+        ("TrendFollowing",     "SMA20 > SMA50 uptrend + RSI > 50 confirmation"),
+        ("VolatilityBreakout", "Last candle range > 2× ATR — follow direction"),
+        ("MACDCross",          "MACD line crosses signal line (crossover event)"),
+    ]
+
+    def _extract_strategy_name(sig: dict) -> str:
+        """Return strategy name from signal dict (new field, or parsed from rationale)."""
+        name = sig.get("strategy", "")
+        if not name:
+            rationale = sig.get("rationale", "")
+            if rationale.startswith("[") and "]" in rationale:
+                name = rationale[1:rationale.index("]")]
+        return name
+
     async def get_strategies(request: web.Request) -> web.Response:
-        """Strategy performance derived from live signal_store."""
-        total  = len(signal_store)
-        calls  = sum(1 for s in signal_store if s.get("direction") == "CALL")
-        puts   = total - calls
+        """All 10 strategies with live signal counts and DB performance stats."""
+        total = len(signal_store)
+        calls = sum(1 for s in signal_store if s.get("direction") == "CALL")
+        puts  = total - calls
         seen: dict = {}
+        sig_counts: dict = {}
         for s in signal_store:
             sym = s.get("symbol")
             if sym:
                 seen[sym] = True
+            sname = _extract_strategy_name(s)
+            if sname:
+                sig_counts[sname] = sig_counts.get(sname, 0) + 1
+
+        perf = position_store.get_strategy_scores() if position_store else {}
+
+        strategies = []
+        for name, description in _STRATEGY_META:
+            row = perf.get(name, {})
+            strategies.append({
+                "name":        name,
+                "description": description,
+                "signals":     sig_counts.get(name, 0),
+                "trades":      row.get("trades", 0),
+                "wins":        row.get("wins", 0),
+                "losses":      row.get("losses", 0),
+                "win_rate":    row.get("win_rate", 0.0),
+                "total_pnl":   row.get("total_pnl", 0.0),
+            })
+
         return web.json_response({
-            "strategy":       "RSI + MACD",
-            "description":    "RSI(14) mean-reversion entries confirmed by MACD histogram, with ATR-based stops.",
             "is_active":      True,
             "total_signals":  total,
             "call_signals":   calls,
             "put_signals":    puts,
             "symbols_traded": list(seen.keys())[-20:],
+            "strategies":     strategies,
         })
+
+    async def post_reset(request: web.Request) -> web.Response:
+        """Reset all paper trading data (positions, signals, cooldowns, strategy stats, actions)."""
+        if not position_store:
+            return web.json_response({"error": "no persistence store"}, status=503)
+        try:
+            from src.persistence import (
+                PositionRecord, CooldownRecord, SignalRecord,
+                ActionRecord, StrategyPerformanceRecord,
+            )
+            from datetime import datetime, timezone as _tz
+            with position_store.SessionLocal() as session:
+                session.query(PositionRecord).delete()
+                session.query(CooldownRecord).delete()
+                session.query(SignalRecord).delete()
+                session.query(ActionRecord).delete()
+                session.query(StrategyPerformanceRecord).delete()
+                session.commit()
+
+            signal_store.clear()
+            _action_store.clear()
+
+            reset_entry = {
+                "event": "SYSTEM_RESET", "symbol": None,
+                "detail": "Paper trading data reset by user",
+                "data": {}, "ts": datetime.now(_tz.utc).isoformat(),
+            }
+            _action_store.append(reset_entry)
+            log.info("paper trading data reset by user")
+            return web.json_response({"ok": True})
+        except Exception as exc:
+            log.error("reset failed", error=str(exc))
+            return web.json_response({"error": str(exc)}, status=500)
 
     async def run_backtest_endpoint(request: web.Request) -> web.Response:
         """Run a real backtest using Yahoo Finance historical data."""
@@ -734,6 +809,7 @@ def create_app(
     app.router.add_get("/overview",         get_overview)
     app.router.add_get("/quote/{symbol}",   get_quote)
     app.router.add_get("/strategies",       get_strategies)
+    app.router.add_post("/reset",           post_reset)
     app.router.add_post("/backtest/run",    run_backtest_endpoint)
     app.router.add_get("/config",                get_config_endpoint)
     app.router.add_post("/config",               post_config_endpoint)
