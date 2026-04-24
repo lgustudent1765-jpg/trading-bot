@@ -127,6 +127,11 @@ export const api = {
   reset:        ()                        => fetch(`${API_BASE}/reset`, {
     method: "POST",
   }).then((r) => r.json() as Promise<{ ok?: boolean; error?: string }>),
+  placeOrder:   (req: OrderRequest)       => fetch(`${API_BASE}/order`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  }).then((r) => r.json() as Promise<{ ok?: boolean; detail?: string; error?: string }>),
 };
 
 export interface MarketMover {
@@ -181,6 +186,14 @@ export interface StrategiesResponse {
 export interface BacktestRequest {
   symbol: string;
   period: string;
+}
+
+export interface OrderRequest {
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  price?: number;
+  orderType: "market" | "limit";
 }
 
 export interface BacktestResponse {

@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/modal";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { ToastData } from "@/components/ui/toast";
+import { api } from "@/lib/api";
 
 interface OrderPanelProps {
   onToast: (t: Omit<ToastData, "id">) => void;
@@ -57,15 +58,30 @@ export function OrderPanel({ onToast }: OrderPanelProps) {
 
   async function handleConfirm() {
     setLoading(true);
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 1200));
-    setLoading(false);
-    setConfirmOpen(false);
-    setForm(INITIAL);
-    onToast({
-      type: "success",
-      message: `${side === "buy" ? "Buy" : "Sell"} order for ${form.qty} ${form.symbol} submitted`,
-    });
+    try {
+      const res = await api.placeOrder({
+        symbol: form.symbol,
+        side,
+        qty: Number(form.qty),
+        ...(form.orderType === "limit" ? { price: Number(form.price) } : {}),
+        orderType: form.orderType,
+      });
+      setConfirmOpen(false);
+      setForm(INITIAL);
+      if (res.ok) {
+        onToast({
+          type: "success",
+          message: `${side === "buy" ? "Buy" : "Sell"} order for ${form.qty} ${form.symbol} submitted`,
+        });
+      } else {
+        onToast({ type: "error", message: res.error ?? "Order failed." });
+      }
+    } catch {
+      setConfirmOpen(false);
+      onToast({ type: "error", message: "Cannot reach backend." });
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

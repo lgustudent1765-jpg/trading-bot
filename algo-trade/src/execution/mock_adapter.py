@@ -26,7 +26,7 @@ from src.logger import get_logger
 
 log = get_logger(__name__)
 
-_EQUITY = 100.0
+_EQUITY = 1000.0
 _NEUTRAL_SPOT = 150.0  # baseline underlying price used for delta-based option pricing
 
 
@@ -76,11 +76,18 @@ class MockBrokerAdapter(BrokerAdapter):
             equity = float(
                 config.get("paper_trading", {}).get("initial_capital", equity)
             )
+        self._initial_equity = equity
         self._equity = equity
         self._orders: Dict[str, OrderEvent] = {}
         # Tracks per-symbol cumulative price drift so the stop monitor sees
         # changing option prices on every poll and can trigger exits.
         self._price_offsets: Dict[str, float] = {}
+
+    def reset(self) -> None:
+        """Reset all in-memory state to initial conditions (called on paper-trading reset)."""
+        self._equity = self._initial_equity
+        self._orders.clear()
+        self._price_offsets.clear()
 
     async def get_option_chain(self, symbol: str, underlying_price: float = 0.0) -> List[OptionContract]:
         # Advance the simulated underlying by a random-walk step (~1.5 pt std dev).

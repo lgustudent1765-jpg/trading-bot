@@ -33,7 +33,7 @@ market_data:
   retry_max: 3
 mode: paper
 paper_trading:
-  initial_capital: 100
+  initial_capital: 1000
 notifications:
   email:
     enabled: true

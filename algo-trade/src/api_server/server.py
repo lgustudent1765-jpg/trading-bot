@@ -63,6 +63,7 @@ def create_app(
     position_store: Optional[Any] = None,
     market_adapter: Optional[Any] = None,
     action_store: Optional[List[Dict]] = None,
+    broker_adapter: Optional[Any] = None,
 ) -> web.Application:
     _action_store: List[Dict] = action_store if action_store is not None else []
 
@@ -131,7 +132,7 @@ def create_app(
             "total_pnl": 0.0, "trade_count": 0, "win_count": 0, "loss_count": 0,
             "win_rate": 0.0, "avg_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
         }
-        paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 100.0))
+        paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 1000.0))
         return web.json_response({
             # system
             "uptime_s":          round(time.time() - _START_TIME, 1),
@@ -726,6 +727,9 @@ def create_app(
             signal_store.clear()
             _action_store.clear()
 
+            if broker_adapter is not None and hasattr(broker_adapter, "reset"):
+                broker_adapter.reset()
+
             reset_entry = {
                 "event": "SYSTEM_RESET", "symbol": None,
                 "detail": "Paper trading data reset by user",
@@ -797,6 +801,63 @@ def create_app(
             log.error("backtest endpoint failed", symbol=symbol, error=str(exc))
             return web.json_response({"error": f"Backtest failed: {exc}"}, status=500)
 
+    async def post_order(request: web.Request) -> web.Response:
+        """Place a manual paper trading order and record it to the activity log."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        from datetime import datetime, timezone as _tz
+
+        symbol     = str(body.get("symbol", "")).strip().upper()
+        side       = str(body.get("side", "")).strip().lower()
+        order_type = str(body.get("orderType", "market")).strip().lower()
+        raw_qty    = body.get("qty", 0)
+        raw_price  = body.get("price", 0)
+
+        if not symbol:
+            return web.json_response({"error": "symbol is required"}, status=400)
+        if side not in ("buy", "sell"):
+            return web.json_response({"error": "side must be 'buy' or 'sell'"}, status=400)
+        try:
+            qty = int(raw_qty)
+            if qty <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return web.json_response({"error": "qty must be a positive integer"}, status=400)
+
+        fill_price = 0.0
+        if order_type == "limit":
+            try:
+                fill_price = float(raw_price)
+                if fill_price <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return web.json_response({"error": "price must be a positive number for limit orders"}, status=400)
+
+        detail = f"Manual {side.upper()} {qty} {symbol}"
+        if fill_price:
+            detail += f" @ ${fill_price:.2f}"
+
+        entry = {
+            "event":  "ORDER_FILLED",
+            "symbol": symbol,
+            "detail": detail,
+            "data":   {"side": side, "qty": qty, "price": fill_price, "orderType": order_type},
+            "ts":     datetime.now(_tz.utc).isoformat(),
+        }
+        _action_store.append(entry)
+        if position_store:
+            position_store.add_action(
+                event="ORDER_FILLED",
+                symbol=symbol,
+                detail=detail,
+                data={"side": side, "qty": qty, "price": fill_price, "orderType": order_type},
+            )
+        log.info("manual order placed", symbol=symbol, side=side, qty=qty, price=fill_price)
+        return web.json_response({"ok": True, "detail": detail})
+
     # ── Router ──────────────────────────────────────────────────────────────
 
     app = web.Application()
@@ -810,6 +871,7 @@ def create_app(
     app.router.add_get("/quote/{symbol}",   get_quote)
     app.router.add_get("/strategies",       get_strategies)
     app.router.add_post("/reset",           post_reset)
+    app.router.add_post("/order",           post_order)
     app.router.add_post("/backtest/run",    run_backtest_endpoint)
     app.router.add_get("/config",                get_config_endpoint)
     app.router.add_post("/config",               post_config_endpoint)
