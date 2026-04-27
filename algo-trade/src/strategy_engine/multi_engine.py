@@ -128,7 +128,12 @@ class MultiStrategyEngine:
         th        = self._config.get("trading_hours", {})
         start_str = th.get("start", "09:45")
         end_str   = th.get("end", "15:30")
-        now = datetime.now().time()
+        # Always compare against Eastern Time regardless of server timezone
+        try:
+            from src.market_hours import now_et
+            now = now_et().time()
+        except Exception:
+            now = datetime.now().time()
         try:
             start = time(*[int(p) for p in start_str.split(":")])
             end   = time(*[int(p) for p in end_str.split(":")])
