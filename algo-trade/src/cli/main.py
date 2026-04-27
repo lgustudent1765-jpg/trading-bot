@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 from pathlib import Path
@@ -147,6 +148,8 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
                 _signal_store.pop(0)
 
     api_cfg = config.get("api_server", {})
+    # Railway injects PORT; respect it over the config file value.
+    api_port = int(os.environ.get("PORT") or os.environ.get("API_PORT") or api_cfg.get("port", 8181))
     app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store, broker_adapter, strategy_engine=engine)
 
     log.info("pipeline starting", mode=mode)
@@ -162,7 +165,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
             asyncio.ensure_future(order_mgr.run()),
             asyncio.ensure_future(_signal_tap()),
             asyncio.ensure_future(
-                run_api_server(app, api_cfg.get("host", "0.0.0.0"), api_cfg.get("port", 8181))
+                run_api_server(app, api_cfg.get("host", "0.0.0.0"), api_port)
             ),
         ]
         task_list.extend(tasks)
