@@ -215,99 +215,87 @@ class MultiStrategyEngine:
             ))
 
     # ------------------------------------------------------------------ #
-    # Core processing                                                      #
+    # Core processing — helpers                                            #
     # ------------------------------------------------------------------ #
 
-    async def _process_chain(self, event: OptionChainEvent) -> None:
-        symbol = event.symbol
-
-        # ── Gate 1: daily circuit breaker ──────────────────────────────
+    def _check_gates(self, symbol: str) -> Optional[str]:
+        """Return a block reason string, or None if all gates pass."""
         halted, reason = self._circuit_breaker.check()
         if halted:
             log.info("circuit_breaker active — no new signals", reason=reason)
-            return
-
-        # ── Gate 2: trading hours ──────────────────────────────────────
+            return reason
         if not self._is_trading_hours():
             log.debug("outside trading hours, skipping", symbol=symbol)
-            return
-
-        # ── Gate 3: cooldown / already in position ─────────────────────
+            return "outside_hours"
         if self._position_store and self._position_store.is_on_cooldown(symbol, self._cooldown_min):
             log.debug("signal cooldown active", symbol=symbol)
-            return
-
+            return "cooldown"
         if self._position_store and symbol in self._position_store.symbols():
             log.debug("already in position", symbol=symbol)
-            return
+            return "in_position"
+        return None
 
-        # ── Fetch bars ─────────────────────────────────────────────────
+    async def _fetch_bars(self, symbol: str) -> List[Dict]:
         try:
-            bars = await self._market.get_intraday_bars(
+            return await self._market.get_intraday_bars(
                 symbol, interval="1min", limit=self._lookback + 10
             )
         except Exception as exc:
             log.debug("bars fetch failed", symbol=symbol, error=str(exc))
-            return
+            return []
 
-        if not bars:
-            return
+    async def _handle_pending_confirmation(
+        self,
+        symbol: str,
+        bars: List[Dict],
+        contracts: List,
+    ) -> bool:
+        """Advance confirmation state. Returns True if caller should stop processing."""
+        if symbol not in self._pending:
+            return False
+        entry = self._pending[symbol]
 
-        # ── Handle pending confirmation ────────────────────────────────
-        if symbol in self._pending:
-            entry = self._pending[symbol]
+        if self._is_pending_expired(entry):
+            log.debug("pending signal expired — discarding", symbol=symbol,
+                      strategy=entry["strategy_name"])
+            del self._pending[symbol]
+            return False  # fall through to re-evaluate fresh
 
-            if self._is_pending_expired(entry):
-                log.debug("pending signal expired — discarding", symbol=symbol,
+        strategy = next((s for s in self._strategies if s.name == entry["strategy_name"]), None)
+        if strategy:
+            fresh_plan = await self._evaluate_strategy(strategy, symbol, bars, contracts)
+            if fresh_plan and fresh_plan.direction == entry["direction"]:
+                entry["confirmations"] += 1
+                entry["plan"] = fresh_plan
+                log.debug("signal confirmation", symbol=symbol,
+                          strategy=entry["strategy_name"],
+                          confirmations=entry["confirmations"],
+                          needed=self._confirm_wait_bars)
+                if entry["confirmations"] >= self._confirm_wait_bars:
+                    del self._pending[symbol]
+                    await self._publish_signal(fresh_plan)
+            else:
+                log.debug("signal not confirmed — discarding", symbol=symbol,
                           strategy=entry["strategy_name"])
                 del self._pending[symbol]
-                # fall through to re-evaluate fresh
-            else:
-                # Re-run the originally selected strategy with fresh data
-                strategy = next(
-                    (s for s in self._strategies if s.name == entry["strategy_name"]), None
-                )
-                if strategy:
-                    fresh_plan = await self._evaluate_strategy(
-                        strategy, symbol, bars, event.contracts
-                    )
-                    if fresh_plan and fresh_plan.direction == entry["direction"]:
-                        entry["confirmations"] += 1
-                        entry["plan"] = fresh_plan  # use latest prices
-                        log.debug(
-                            "signal confirmation",
-                            symbol=symbol,
-                            strategy=entry["strategy_name"],
-                            confirmations=entry["confirmations"],
-                            needed=self._confirm_wait_bars,
-                        )
-                        if entry["confirmations"] >= self._confirm_wait_bars:
-                            del self._pending[symbol]
-                            await self._publish_signal(fresh_plan)
-                    else:
-                        log.debug(
-                            "signal not confirmed — discarding",
-                            symbol=symbol,
-                            strategy=entry["strategy_name"],
-                        )
-                        del self._pending[symbol]
-                return  # don't generate a new signal while one is pending
+        return True
 
-        # ── Run all strategies concurrently ────────────────────────────
+    async def _select_best_plan(
+        self,
+        symbol: str,
+        bars: List[Dict],
+        contracts: List,
+    ) -> Optional[TradePlan]:
+        """Run all strategies, apply market-bias filter, pick winner."""
         results = await asyncio.gather(
-            *[
-                self._evaluate_strategy(s, symbol, bars, event.contracts)
-                for s in self._strategies
-            ],
+            *[self._evaluate_strategy(s, symbol, bars, contracts) for s in self._strategies],
             return_exceptions=False,
         )
-
         candidates: List[TradePlan] = [r for r in results if r is not None]
         if not candidates:
             log.debug("no signal from any strategy", symbol=symbol)
-            return
+            return None
 
-        # ── Market trend filter ────────────────────────────────────────
         market_bias = await self._spy_trend()
         if market_bias is not None:
             aligned = [c for c in candidates if c.direction == market_bias]
@@ -316,21 +304,14 @@ class MultiStrategyEngine:
             else:
                 log.debug("all signals against market trend, skipping",
                           symbol=symbol, bias=market_bias.value)
-                return
+                return None
 
-        scores = self._get_scores()
-        plan   = self._pick_winner(candidates, scores)
-        if plan is None:
-            return
+        return self._pick_winner(candidates, self._get_scores())
 
-        # ── Queue for confirmation (don't execute immediately) ─────────
-        log.info(
-            "SIGNAL PENDING CONFIRMATION",
-            symbol=symbol,
-            strategy=plan.strategy_name,
-            direction=plan.direction.value,
-            confirmations_needed=self._confirm_wait_bars,
-        )
+    def _queue_for_confirmation(self, symbol: str, plan: TradePlan) -> None:
+        log.info("SIGNAL PENDING CONFIRMATION", symbol=symbol,
+                 strategy=plan.strategy_name, direction=plan.direction.value,
+                 confirmations_needed=self._confirm_wait_bars)
         self._pending[symbol] = {
             "plan":          plan,
             "strategy_name": plan.strategy_name,
@@ -338,6 +319,24 @@ class MultiStrategyEngine:
             "confirmations": 0,
             "first_seen_at": datetime.now(timezone.utc),
         }
+
+    # ------------------------------------------------------------------ #
+    # Core processing                                                      #
+    # ------------------------------------------------------------------ #
+
+    async def _process_chain(self, event: OptionChainEvent) -> None:
+        symbol = event.symbol
+        if self._check_gates(symbol) is not None:
+            return
+        bars = await self._fetch_bars(symbol)
+        if not bars:
+            return
+        if await self._handle_pending_confirmation(symbol, bars, event.contracts):
+            return
+        plan = await self._select_best_plan(symbol, bars, event.contracts)
+        if plan is None:
+            return
+        self._queue_for_confirmation(symbol, plan)
 
     # ------------------------------------------------------------------ #
 
