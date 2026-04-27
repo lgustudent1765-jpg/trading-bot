@@ -114,6 +114,47 @@ class YahooFinanceAdapter(MarketDataAdapter):
             timestamp=datetime.now(timezone.utc),
         )
 
+    async def _fetch_bars_for_range(
+        self,
+        symbol: str,
+        yf_interval: str,
+        range_str: str,
+    ) -> List[Dict[str, Any]]:
+        data = await self._get(
+            f"{_BASE_CHART}/{symbol}",
+            {"interval": yf_interval, "range": range_str, "includePrePost": "false"},
+        )
+        result_block = data.get("chart", {}).get("result", [])
+        if not result_block:
+            return []
+        block      = result_block[0]
+        timestamps = block.get("timestamp", [])
+        quote_data = block.get("indicators", {}).get("quote", [{}])[0]
+        opens   = quote_data.get("open",   [])
+        highs   = quote_data.get("high",   [])
+        lows    = quote_data.get("low",    [])
+        closes  = quote_data.get("close",  [])
+        volumes = quote_data.get("volume", [])
+        bars = []
+        for i, ts in enumerate(timestamps):
+            try:
+                o = opens[i];  h = highs[i]
+                l = lows[i];   c = closes[i]
+                v = volumes[i]
+                if None in (o, h, l, c):
+                    continue
+                bars.append({
+                    "datetime": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                    "open":   float(o),
+                    "high":   float(h),
+                    "low":    float(l),
+                    "close":  float(c),
+                    "volume": int(v) if v is not None else 0,
+                })
+            except (IndexError, TypeError):
+                continue
+        return bars
+
     async def get_intraday_bars(
         self,
         symbol: str,
@@ -123,51 +164,18 @@ class YahooFinanceAdapter(MarketDataAdapter):
         """
         Fetch intraday OHLCV bars from Yahoo Finance.
 
-        Returns list of dicts: open, high, low, close, volume, datetime.
-        Yahoo Finance returns up to 1 day of 1-minute bars on the free tier.
+        Tries today's data first (1d range). If fewer than `limit` bars are
+        returned — e.g. early in the session, weekends, or illiquid stocks —
+        falls back to the last 5 trading days of 1-minute bars. Yahoo Finance
+        keeps up to 7 days of 1-minute history.
         """
         yf_interval = _INTERVAL_MAP.get(interval, "1m")
         try:
-            data = await self._get(
-                f"{_BASE_CHART}/{symbol}",
-                {"interval": yf_interval, "range": "1d", "includePrePost": "false"},
-            )
-            result_block = data.get("chart", {}).get("result", [])
-            if not result_block:
-                return []
-
-            block     = result_block[0]
-            timestamps = block.get("timestamp", [])
-            quote_data = block.get("indicators", {}).get("quote", [{}])[0]
-            opens      = quote_data.get("open",   [])
-            highs      = quote_data.get("high",   [])
-            lows       = quote_data.get("low",    [])
-            closes     = quote_data.get("close",  [])
-            volumes    = quote_data.get("volume", [])
-
-            bars = []
-            for i, ts in enumerate(timestamps):
-                # Skip bars with None values (pre/post-market gaps)
-                try:
-                    o = opens[i];   h = highs[i]
-                    l = lows[i];    c = closes[i]
-                    v = volumes[i]
-                    if None in (o, h, l, c, v):
-                        continue
-                    bars.append({
-                        "datetime": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
-                        "open":   float(o),
-                        "high":   float(h),
-                        "low":    float(l),
-                        "close":  float(c),
-                        "volume": int(v),
-                    })
-                except (IndexError, TypeError):
-                    continue
-
-            # Return most recent `limit` bars in chronological order.
+            bars = await self._fetch_bars_for_range(symbol, yf_interval, "1d")
+            if len(bars) < limit:
+                # Not enough bars from today — pull the last 5 trading days.
+                bars = await self._fetch_bars_for_range(symbol, yf_interval, "5d")
             return bars[-limit:]
-
         except Exception as exc:
             log.error("Yahoo intraday bars failed", symbol=symbol, error=str(exc))
             return []
