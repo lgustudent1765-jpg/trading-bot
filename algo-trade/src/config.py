@@ -191,6 +191,19 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
 
     merged = deep_merge(defaults, raw)
     merged = _apply_env_overrides(merged)
+
+    # Validate the merged config against the Pydantic schema.
+    # Errors are logged as warnings so a partially-broken config still boots
+    # rather than crashing — but the problem is surfaced immediately.
+    try:
+        from src.config_schema import AppConfig
+        AppConfig.model_validate(merged)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Config validation warning — some values may be invalid: %s", exc
+        )
+
     _CONFIG = merged
     return merged
 

@@ -11,6 +11,22 @@ from typing import Any, Dict
 
 import pytest
 
+# ── Debug tooling available in every test session ───────────────────────────
+# rich: colourised tracebacks — shows local variables on failure
+# icecream: ic() is available globally; use `from icecream import ic` in tests
+try:
+    from rich.traceback import install as _install_rich
+    _install_rich(show_locals=True, width=120, suppress=[])
+except ImportError:
+    pass
+
+try:
+    import icecream
+    icecream.install()  # makes ic() a builtin — no import needed in test files
+except ImportError:
+    pass
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="session")
 def default_config() -> Dict[str, Any]:

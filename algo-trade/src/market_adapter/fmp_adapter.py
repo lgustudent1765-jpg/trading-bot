@@ -14,11 +14,16 @@ the caller retry with exponential backoff.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.events import MarketQuote
 from src.logger import get_logger
@@ -27,6 +32,9 @@ from src.market_adapter.base import MarketDataAdapter
 log = get_logger(__name__)
 
 _BASE = "https://financialmodelingprep.com/api/v3"
+
+# PermissionError (401) is a config problem — never retry it.
+_RETRYABLE = (aiohttp.ClientError, TimeoutError, ValueError)
 
 
 class FMPMarketAdapter(MarketDataAdapter):
@@ -40,8 +48,6 @@ class FMPMarketAdapter(MarketDataAdapter):
         self._retry_max: int = int(md_cfg.get("retry_max", 3))
         self._retry_backoff: float = float(md_cfg.get("retry_backoff", 2.0))
         self._session: Optional[aiohttp.ClientSession] = None
-        self._failure_count: int = 0
-        self._circuit_open: bool = False
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -50,56 +56,44 @@ class FMPMarketAdapter(MarketDataAdapter):
             self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         return self._session
 
+    async def _fetch_once(self, url: str, params: Dict) -> Any:
+        """Single HTTP GET — raises on non-2xx; caller handles retries."""
+        session = await self._get_session()
+        async with session.get(url, params=params) as resp:
+            if resp.status == 401:
+                raise PermissionError(
+                    "FMP API key invalid or endpoint requires a paid plan. "
+                    "Check your FMP_API_KEY and account tier at financialmodelingprep.com"
+                )
+            resp.raise_for_status()
+            return await resp.json()
+
     async def _get(self, endpoint: str, params: Optional[Dict] = None) -> Any:
-        """
-        Perform a GET request with retry/backoff and circuit-breaker logic.
-
-        Raises RuntimeError when the circuit breaker is open.
-        """
-        if self._circuit_open:
-            raise RuntimeError("FMP circuit breaker is open; too many failures.")
-
+        """GET with exponential-backoff retries via tenacity (skips 401 errors)."""
         url = f"{self._base_url}/{endpoint}"
-        p = {"apikey": self._api_key}
+        p: Dict[str, Any] = {"apikey": self._api_key}
         if params:
             p.update(params)
 
-        for attempt in range(1, self._retry_max + 1):
-            try:
-                session = await self._get_session()
-                async with session.get(url, params=p) as resp:
-                    if resp.status == 401:
-                        raise PermissionError(
-                            "FMP API key invalid or endpoint requires a paid plan. "
-                            "Check your FMP_API_KEY and account tier at financialmodelingprep.com"
-                        )
-                    resp.raise_for_status()
-                    data = await resp.json()
-                    self._failure_count = 0
-                    return data
-            except PermissionError:
-                # 401 is a config error — do not retry, do not trigger circuit breaker.
-                log.error(
-                    "FMP auth failed — check FMP_API_KEY and account plan",
-                    endpoint=endpoint,
-                )
-                raise
-            except Exception as exc:
-                self._failure_count += 1
-                log.warning(
-                    "FMP request failed",
-                    endpoint=endpoint,
-                    attempt=attempt,
-                    failure_count=self._failure_count,
-                    error=str(exc),
-                )
-                if self._failure_count >= self._retry_max * 2:
-                    self._circuit_open = True
-                    log.error("FMP circuit breaker opened")
-                if attempt < self._retry_max:
-                    wait = self._retry_backoff ** attempt
-                    await asyncio.sleep(wait)
-                else:
+        async for attempt in AsyncRetrying(
+            retry=retry_if_exception_type(_RETRYABLE),
+            stop=stop_after_attempt(self._retry_max),
+            wait=wait_exponential(multiplier=self._retry_backoff, min=1, max=30),
+            reraise=True,
+        ):
+            with attempt:
+                try:
+                    return await self._fetch_once(url, p)
+                except PermissionError:
+                    log.error("FMP auth failed — check FMP_API_KEY and account plan", endpoint=endpoint)
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "FMP request failed",
+                        endpoint=endpoint,
+                        attempt=attempt.retry_state.attempt_number,
+                        error=str(exc),
+                    )
                     raise
 
     @staticmethod
