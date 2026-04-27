@@ -76,4 +76,4 @@ class TestDashboard:
     async def test_dashboard_contains_algo_trade_title(self, make_app):
         async with TestClient(TestServer(make_app())) as client:
             text = await (await client.get("/")).text()
-            assert "Algo-Trade" in text or "algo-trade" in text.lower()
+            assert "algotrade" in text.lower() or "algo-trade" in text.lower()

@@ -167,7 +167,9 @@ def create_app(
         })
 
     async def sse_stream(request: web.Request) -> web.StreamResponse:
-        """Server-Sent Events endpoint — pushes /status JSON every 5 seconds."""
+        """Server-Sent Events — pushes full dashboard state every 5 seconds."""
+        import json as _json
+        from src.daily_circuit_breaker import DailyCircuitBreaker
         resp = web.StreamResponse(headers={
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -182,19 +184,40 @@ def create_app(
                 positions  = position_store.get_positions() if position_store else {}
                 sigs       = signal_store[-20:] if signal_store else []
                 acts       = list(reversed(_action_store[-30:])) if _action_store else []
+                pnl        = position_store.get_pnl_summary() if position_store else {
+                    "total_pnl": 0.0, "trade_count": 0, "win_count": 0,
+                    "loss_count": 0, "win_rate": 0.0, "avg_pnl": 0.0,
+                    "best_trade": 0.0, "worst_trade": 0.0,
+                }
+                daily_pnl  = position_store.get_daily_pnl() if position_store else 0.0
+                paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 25000.0))
+                cb = DailyCircuitBreaker(cfg, position_store).status
+                pending_count = len(getattr(strategy_engine, "_pending", {})) if strategy_engine else 0
 
-                import json as _json
                 payload = _json.dumps({
                     "market_open":    is_market_open(),
                     "market_time":    now_et().strftime("%Y-%m-%d %H:%M:%S ET"),
                     "mode":           cfg.get("mode", "paper"),
                     "open_positions": open_count,
                     "signal_count":   len(signal_store),
+                    "pending_signals": pending_count,
                     "db_ok":          db_ok,
                     "uptime_s":       round(time.time() - _START_TIME),
                     "signals":        sigs,
                     "positions":      positions,
                     "activity":       acts,
+                    # P&L
+                    "paper_capital":  paper_capital,
+                    "total_pnl":      pnl.get("total_pnl", 0.0),
+                    "daily_pnl":      round(daily_pnl, 2),
+                    "trade_count":    pnl.get("trade_count", 0),
+                    "win_count":      pnl.get("win_count", 0),
+                    "loss_count":     pnl.get("loss_count", 0),
+                    "win_rate":       pnl.get("win_rate", 0.0),
+                    "avg_pnl":        pnl.get("avg_pnl", 0.0),
+                    "best_trade":     pnl.get("best_trade", 0.0),
+                    "worst_trade":    pnl.get("worst_trade", 0.0),
+                    "circuit_breaker": cb,
                 })
                 await resp.write(f"data: {payload}\n\n".encode())
                 await asyncio.sleep(5)
@@ -205,154 +228,378 @@ def create_app(
     async def dashboard(request: web.Request) -> web.Response:
         cfg = get_config()
         mode = cfg.get("mode", "paper")
-        mode_label = mode.upper()
-        mode_warn = "" if mode == "automated" else f'<div class="warn">&#9888; {mode_label} MODE — {"No real orders are placed" if mode == "paper" else "Manual approval required"}</div>'
+        paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 25000.0))
 
-        html = """<!DOCTYPE html>
-<html lang="en"><head>
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>Algo-Trade Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AlgoTrade Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Courier New',monospace;background:#0a0a0a;color:#c9d1d9;min-height:100vh;padding:16px}
-  h1{color:#58a6ff;font-size:1.3em;margin-bottom:12px;border-bottom:1px solid #21262d;padding-bottom:8px}
-  .topbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center}
-  .badge{background:#161b22;border:1px solid #30363d;padding:4px 10px;border-radius:6px;font-size:.82em}
-  .badge b{margin-left:4px}
-  .market-open{color:#3fb950} .market-closed{color:#f85149}
-  .call{color:#3fb950;font-weight:bold} .put{color:#f85149;font-weight:bold}
-  .pnl-pos{color:#3fb950} .pnl-neg{color:#f85149}
-  .card{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:14px;margin-bottom:10px}
-  .card-title{color:#58a6ff;font-size:.9em;font-weight:bold;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
-  .count{background:#21262d;color:#8b949e;font-size:.75em;padding:2px 7px;border-radius:10px}
-  table{width:100%;border-collapse:collapse;font-size:.82em}
-  th{background:#161b22;color:#8b949e;padding:6px 10px;text-align:left;border-bottom:1px solid #21262d}
-  td{padding:6px 10px;border-bottom:1px solid #161b22;color:#c9d1d9}
-  tr:last-child td{border-bottom:none}
-  tr:hover td{background:#161b22}
-  .empty{color:#484f58;font-style:italic;padding:12px 0;text-align:center}
-  .warn{color:#d29922;padding:8px 12px;border:1px solid #d29922;border-radius:6px;margin-bottom:10px;font-size:.85em}
-  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
-  .dot-green{background:#3fb950} .dot-red{background:#f85149}
-  .live{color:#3fb950;font-size:.75em;animation:pulse 2s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  @media(max-width:700px){.grid2{grid-template-columns:1fr}}
-  .ev-FILLED,.ev-CLOSED{color:#3fb950}
-  .ev-REJECTED{color:#f85149}
-  .ev-STARTED{color:#58a6ff}
-  .ev-default{color:#8b949e}
+:root{{
+  --bg:#0d0f14;--surface:#141720;--border:#1e2330;--border2:#252c3d;
+  --text:#cdd6f4;--muted:#6c7086;--green:#a6e3a1;--red:#f38ba8;
+  --blue:#89b4fa;--yellow:#f9e2af;--teal:#94e2d5;--lavender:#b4befe;
+  --green-dim:#1e3228;--red-dim:#3b1a20;--blue-dim:#1a2340;
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}}
+.topnav{{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 20px;height:52px;display:flex;align-items:center;gap:12px}}
+.topnav-brand{{font-weight:700;font-size:16px;color:var(--blue);letter-spacing:.5px;margin-right:auto}}
+.topnav-brand span{{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}}
+.pill{{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid}}
+.pill-green{{background:var(--green-dim);color:var(--green);border-color:var(--green)}}
+.pill-red{{background:var(--red-dim);color:var(--red);border-color:var(--red)}}
+.pill-yellow{{background:#2a200a;color:var(--yellow);border-color:var(--yellow)}}
+.pill-blue{{background:var(--blue-dim);color:var(--blue);border-color:var(--blue)}}
+.live-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);
+  animation:pulse 2s infinite;display:inline-block;margin-right:4px}}
+@keyframes pulse{{0%,100%{{opacity:1;box-shadow:0 0 0 0 rgba(166,227,161,.4)}}
+  50%{{opacity:.6;box-shadow:0 0 0 4px rgba(166,227,161,0)}}}}
+.main{{padding:16px 20px;max-width:1400px;margin:0 auto}}
+.kpi-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px}}
+.kpi{{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;position:relative;overflow:hidden}}
+.kpi::before{{content:'';position:absolute;top:0;left:0;right:0;height:2px}}
+.kpi-green::before{{background:var(--green)}}
+.kpi-red::before{{background:var(--red)}}
+.kpi-blue::before{{background:var(--blue)}}
+.kpi-yellow::before{{background:var(--yellow)}}
+.kpi-teal::before{{background:var(--teal)}}
+.kpi-label{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}}
+.kpi-value{{font-size:22px;font-weight:700;line-height:1}}
+.kpi-sub{{font-size:11px;color:var(--muted);margin-top:4px}}
+.pos-green{{color:var(--green)}} .pos-red{{color:var(--red)}}
+.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}}
+.grid3{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}}
+@media(max-width:900px){{.grid2,.grid3{{grid-template-columns:1fr}}}}
+.card{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}}
+.card-hdr{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}}
+.card-title{{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}}
+.badge{{background:var(--border2);color:var(--muted);font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}}
+table{{width:100%;border-collapse:collapse}}
+thead th{{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--border);text-align:left}}
+tbody td{{padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text)}}
+tbody tr:last-child td{{border-bottom:none}}
+tbody tr:hover td{{background:rgba(255,255,255,.03)}}
+.empty{{color:var(--muted);font-style:italic;text-align:center;padding:20px;font-size:13px}}
+.call{{color:var(--green);font-weight:700}} .put{{color:var(--red);font-weight:700}}
+.ev-fill{{color:var(--green)}} .ev-reject{{color:var(--red)}} .ev-start{{color:var(--blue)}} .ev-other{{color:var(--muted)}}
+.cb-ok{{color:var(--green)}} .cb-halt{{color:var(--red)}}
+.chart-wrap{{position:relative;height:160px}}
+.warn-bar{{background:#2a200a;border:1px solid var(--yellow);color:var(--yellow);
+  padding:8px 16px;font-size:12px;text-align:center;border-radius:6px;margin-bottom:12px}}
+.footer{{color:var(--muted);font-size:11px;padding:12px 20px;border-top:1px solid var(--border);
+  display:flex;flex-wrap:wrap;gap:8px}}
+.footer a{{color:var(--blue);text-decoration:none}}
 </style>
-</head><body>
-<h1>&#9650; Algo-Trade Dashboard <span class="live">&#11044; LIVE</span></h1>
-""" + mode_warn + """
-<div class="topbar" id="topbar">
-  <span class="badge">Market: <b id="mkt">—</b></span>
-  <span class="badge">Time: <b id="mkt-time">—</b></span>
-  <span class="badge">Mode: <b id="mode">—</b></span>
-  <span class="badge">Positions: <b id="pos-count">—</b></span>
-  <span class="badge">Signals: <b id="sig-count">—</b></span>
-  <span class="badge">DB: <b id="db">—</b></span>
-  <span class="badge">Uptime: <b id="uptime">—</b></span>
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="topnav-brand">&#9651; AlgoTrade <span>Options Automation</span></span>
+  <span id="nav-mkt" class="pill pill-blue">—</span>
+  <span id="nav-mode" class="pill pill-yellow">{mode.upper()}</span>
+  <span><span class="live-dot"></span><span id="nav-time" style="font-size:12px;color:var(--muted)">connecting...</span></span>
+</nav>
+
+<div class="main">
+{"" if mode=="automated" else f'<div class="warn-bar">&#9888; {mode.upper()} MODE — {"No real orders are placed" if mode=="paper" else "Manual approval required"}</div>'}
+
+<!-- KPI row -->
+<div class="kpi-row">
+  <div class="kpi kpi-blue">
+    <div class="kpi-label">Account Value</div>
+    <div class="kpi-value" id="k-capital">—</div>
+    <div class="kpi-sub">Starting: ${paper_capital:,.0f}</div>
+  </div>
+  <div class="kpi kpi-green">
+    <div class="kpi-label">Total P&amp;L</div>
+    <div class="kpi-value" id="k-total-pnl">—</div>
+    <div class="kpi-sub" id="k-total-pnl-sub">all time</div>
+  </div>
+  <div class="kpi kpi-teal">
+    <div class="kpi-label">Today&apos;s P&amp;L</div>
+    <div class="kpi-value" id="k-daily-pnl">—</div>
+    <div class="kpi-sub" id="k-daily-pnl-sub">today</div>
+  </div>
+  <div class="kpi kpi-yellow">
+    <div class="kpi-label">Win Rate</div>
+    <div class="kpi-value" id="k-winrate">—</div>
+    <div class="kpi-sub" id="k-trades">0 trades</div>
+  </div>
+  <div class="kpi kpi-blue">
+    <div class="kpi-label">Open Positions</div>
+    <div class="kpi-value" id="k-positions">—</div>
+    <div class="kpi-sub" id="k-pending">0 pending signals</div>
+  </div>
+  <div class="kpi kpi-green">
+    <div class="kpi-label">Best Trade</div>
+    <div class="kpi-value" id="k-best">—</div>
+    <div class="kpi-sub" id="k-worst">worst: —</div>
+  </div>
 </div>
 
+<!-- P&L chart + circuit breaker -->
 <div class="grid2">
   <div class="card">
-    <div class="card-title">Open Positions <span class="count" id="pos-badge">0</span></div>
+    <div class="card-hdr">
+      <span class="card-title">P&amp;L History</span>
+      <span class="badge" id="cb-status">Circuit Breaker: —</span>
+    </div>
+    <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">Trade Stats</span>
+      <span class="badge" id="db-badge">DB: —</span>
+    </div>
+    <div class="chart-wrap"><canvas id="win-chart"></canvas></div>
+  </div>
+</div>
+
+<!-- Positions + Signals -->
+<div class="grid2">
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">Open Positions</span>
+      <span class="badge" id="pos-badge">0</span>
+    </div>
     <div id="positions-body"><p class="empty">No open positions.</p></div>
   </div>
   <div class="card">
-    <div class="card-title">Recent Signals <span class="count" id="sig-badge">0</span></div>
+    <div class="card-hdr">
+      <span class="card-title">Recent Signals</span>
+      <span class="badge" id="sig-badge">0</span>
+    </div>
     <div id="signals-body"><p class="empty">No signals yet.</p></div>
   </div>
 </div>
 
+<!-- Activity log -->
 <div class="card">
-  <div class="card-title">Activity Log <span class="count" id="act-badge">0</span></div>
+  <div class="card-hdr">
+    <span class="card-title">Activity Log</span>
+    <span class="badge" id="act-badge">0</span>
+  </div>
   <div id="activity-body"><p class="empty">No activity yet.</p></div>
 </div>
 
-<div class="card" style="font-size:.8em;color:#484f58">
-  API: <a href="/health" style="color:#58a6ff">/health</a>
-  &nbsp;<a href="/signals" style="color:#58a6ff">/signals</a>
-  &nbsp;<a href="/positions" style="color:#58a6ff">/positions</a>
-  &nbsp;<a href="/metrics" style="color:#58a6ff">/metrics</a>
-  &nbsp;<a href="/status" style="color:#58a6ff">/status</a>
+</div><!-- /main -->
+
+<div class="footer">
+  <span>Uptime: <b id="uptime">—</b></span>
+  <a href="/health">/health</a>
+  <a href="/signals">/signals</a>
+  <a href="/positions">/positions</a>
+  <a href="/metrics">/metrics</a>
+  <a href="/status">/status</a>
 </div>
 
 <script>
-function e(v){const d=document.createElement('div');d.textContent=String(v??'—');return d.textContent}
-function fmt(ts){return ts?String(ts).slice(0,19).replace('T',' '):'—'}
+/* ── helpers ── */
+const $ = id => document.getElementById(id);
+function esc(v){{const d=document.createElement('div');d.textContent=String(v??'—');return d.textContent}}
+function fmt(ts){{return ts?String(ts).slice(0,19).replace('T',' '):'—'}}
+function money(v){{
+  const n=Number(v)||0;
+  const sign=n>=0?'+':'-';
+  return (n>=0?'':'-')+'$'+Math.abs(n).toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
+}}
+function pct(v){{return((Number(v)||0)*100).toFixed(1)+'%'}}
+function setColor(el,v){{el.className=el.className.replace(/pos-(green|red)/g,'');el.classList.add(Number(v)>=0?'pos-green':'pos-red')}}
 
-function renderPositions(pos){
-  const keys=Object.keys(pos||{});
+/* ── P&L chart ── */
+const pnlCtx=$('pnl-chart').getContext('2d');
+const pnlChart=new Chart(pnlCtx,{{
+  type:'line',
+  data:{{labels:[],datasets:[{{label:'Cumulative P&L',data:[],borderColor:'#89b4fa',
+    backgroundColor:'rgba(137,180,250,.08)',fill:true,tension:.3,pointRadius:3,
+    pointBackgroundColor:ctx=>{{
+      const v=ctx.dataset.data[ctx.dataIndex]||0;
+      return v>=0?'#a6e3a1':'#f38ba8';
+    }}
+  }}]}},
+  options:{{responsive:true,maintainAspectRatio:false,animation:{{duration:300}},
+    plugins:{{legend:{{display:false}},tooltip:{{callbacks:{{label:c=>money(c.parsed.y)}}}}}},
+    scales:{{
+      x:{{ticks:{{color:'#6c7086',maxRotation:0,maxTicksLimit:6}},grid:{{color:'#1e2330'}}}},
+      y:{{ticks:{{color:'#6c7086',callback:v=>money(v)}},grid:{{color:'#1e2330'}}}}
+    }}
+  }}
+}});
+let pnlHistory=[{{label:'Start',value:0}}];
+
+/* ── Win/Loss donut ── */
+const winCtx=$('win-chart').getContext('2d');
+const winChart=new Chart(winCtx,{{
+  type:'doughnut',
+  data:{{labels:['Wins','Losses','No trades'],datasets:[{{
+    data:[0,0,1],
+    backgroundColor:['#a6e3a1','#f38ba8','#1e2330'],
+    borderColor:['#a6e3a1','#f38ba8','#1e2330'],
+    borderWidth:1,hoverOffset:4
+  }}]}},
+  options:{{responsive:true,maintainAspectRatio:false,animation:{{duration:300}},
+    cutout:'65%',
+    plugins:{{legend:{{position:'right',labels:{{color:'#6c7086',font:{{size:11}},boxWidth:12}}}},
+      tooltip:{{callbacks:{{label:c=>c.label+': '+c.parsed}}}}}}
+  }}
+}});
+
+/* ── render tables ── */
+function renderPositions(pos){{
+  const keys=Object.keys(pos||{{}});
   if(!keys.length)return'<p class="empty">No open positions.</p>';
-  let h='<table><thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Direction</th><th>Stop</th><th>Target</th></tr></thead><tbody>';
-  for(const k of keys){
+  let h='<table><thead><tr><th>Contract</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Stop</th><th>Target</th></tr></thead><tbody>';
+  for(const k of keys){{
     const p=pos[k];
     const dir=(p.direction||'').toUpperCase();
-    h+=`<tr><td><b>${e(k)}</b></td><td>${e(p.quantity)}</td><td>${e(p.entry_price)}</td>
-        <td class="${dir==='CALL'?'call':'put'}">${e(dir)}</td>
-        <td>${e(p.stop_loss)}</td><td>${e(p.take_profit)}</td></tr>`;
-  }
+    h+=`<tr>
+      <td style="font-family:monospace;font-size:12px;color:var(--muted)">${{esc(k)}}</td>
+      <td><b>${{esc(p.symbol||k.split('_')[0])}}</b></td>
+      <td class="${{dir==='CALL'?'call':'put'}}">${{esc(dir)}}</td>
+      <td>${{esc(p.quantity)}}</td>
+      <td>$${{esc(p.entry_price)}}</td>
+      <td style="color:var(--red)">$${{esc(p.stop_loss)}}</td>
+      <td style="color:var(--green)">$${{esc(p.take_profit)}}</td>
+    </tr>`;
+  }}
   return h+'</tbody></table>';
-}
+}}
 
-function renderSignals(sigs){
+function renderSignals(sigs){{
   if(!sigs||!sigs.length)return'<p class="empty">No signals yet.</p>';
-  let h='<table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Strategy</th></tr></thead><tbody>';
-  for(const s of [...sigs].reverse()){
+  let h='<table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Strategy</th></tr></thead><tbody>';
+  for(const s of [...sigs].reverse()){{
     const dir=(s.direction||'').toUpperCase();
-    h+=`<tr><td style="color:#484f58">${fmt(s.ts)}</td><td><b>${e(s.symbol)}</b></td>
-        <td class="${dir==='CALL'?'call':'put'}">${e(dir)}</td>
-        <td>${e(s.entry)}</td><td style="color:#8b949e">${e(s.strategy)}</td></tr>`;
-  }
+    h+=`<tr>
+      <td style="color:var(--muted);font-size:12px">${{fmt(s.ts)}}</td>
+      <td><b>${{esc(s.symbol)}}</b></td>
+      <td class="${{dir==='CALL'?'call':'put'}}">${{esc(dir)}}</td>
+      <td>$${{esc(s.entry)}}</td>
+      <td style="color:var(--red)">$${{esc(s.stop)}}</td>
+      <td style="color:var(--green)">$${{esc(s.target)}}</td>
+      <td style="color:var(--muted);font-size:12px">${{esc(s.strategy)}}</td>
+    </tr>`;
+  }}
   return h+'</tbody></table>';
-}
+}}
 
-function evClass(ev){
-  if(ev.includes('FILL')||ev.includes('CLOSED'))return'ev-FILLED';
-  if(ev.includes('REJECT'))return'ev-REJECTED';
-  if(ev.includes('START'))return'ev-STARTED';
-  return'ev-default';
-}
+function evCls(ev){{
+  if(!ev)return'ev-other';
+  if(ev.includes('FILL')||ev.includes('CLOSED'))return'ev-fill';
+  if(ev.includes('REJECT'))return'ev-reject';
+  if(ev.includes('START'))return'ev-start';
+  return'ev-other';
+}}
 
-function renderActivity(acts){
+function renderActivity(acts){{
   if(!acts||!acts.length)return'<p class="empty">No activity yet.</p>';
   let h='<table><thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Detail</th></tr></thead><tbody>';
-  for(const a of acts){
-    h+=`<tr><td style="color:#484f58">${fmt(a.ts)}</td>
-        <td class="${evClass(a.event||'')}">${e(a.event)}</td>
-        <td><b>${e(a.symbol)}</b></td>
-        <td style="color:#8b949e">${e(a.detail)}</td></tr>`;
-  }
+  for(const a of acts){{
+    h+=`<tr>
+      <td style="color:var(--muted);font-size:12px">${{fmt(a.ts)}}</td>
+      <td class="${{evCls(a.event||'')}}" style="font-weight:600">${{esc(a.event)}}</td>
+      <td><b>${{esc(a.symbol)}}</b></td>
+      <td style="color:var(--muted);font-size:12px">${{esc(a.detail)}}</td>
+    </tr>`;
+  }}
   return h+'</tbody></table>';
-}
+}}
 
-function update(d){
+/* ── main update ── */
+function update(d){{
+  /* nav bar */
   const open=d.market_open;
-  document.getElementById('mkt').innerHTML=`<span class="${open?'market-open':'market-closed'}">${open?'OPEN':'CLOSED'}</span>`;
-  document.getElementById('mkt-time').textContent=d.market_time||'—';
-  document.getElementById('mode').textContent=(d.mode||'—').toUpperCase();
-  document.getElementById('pos-count').textContent=d.open_positions??'—';
-  document.getElementById('sig-count').textContent=d.signal_count??'—';
-  document.getElementById('db').innerHTML=d.db_ok?'<span class="market-open">OK</span>':'<span class="market-closed">ERR</span>';
-  document.getElementById('uptime').textContent=d.uptime_s!=null?d.uptime_s+'s':'—';
+  $('nav-mkt').textContent=open?'MARKET OPEN':'MARKET CLOSED';
+  $('nav-mkt').className='pill '+(open?'pill-green':'pill-red');
+  $('nav-time').textContent=d.market_time||'—';
+  $('uptime').textContent=d.uptime_s!=null?d.uptime_s+'s':'—';
 
-  const posKeys=Object.keys(d.positions||{});
-  document.getElementById('pos-badge').textContent=posKeys.length;
-  document.getElementById('positions-body').innerHTML=renderPositions(d.positions);
+  /* KPI cards */
+  const cap=d.paper_capital||25000;
+  const totalPnl=d.total_pnl||0;
+  const accountVal=cap+totalPnl;
+  $('k-capital').textContent='$'+accountVal.toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
 
-  document.getElementById('sig-badge').textContent=(d.signals||[]).length;
-  document.getElementById('signals-body').innerHTML=renderSignals(d.signals);
+  $('k-total-pnl').textContent=money(totalPnl);
+  setColor($('k-total-pnl'),totalPnl);
+  $('k-total-pnl-sub').textContent=(d.trade_count||0)+' closed trades';
 
-  document.getElementById('act-badge').textContent=(d.activity||[]).length;
-  document.getElementById('activity-body').innerHTML=renderActivity(d.activity);
-}
+  const dpnl=d.daily_pnl||0;
+  $('k-daily-pnl').textContent=money(dpnl);
+  setColor($('k-daily-pnl'),dpnl);
+  const dpct=cap?((dpnl/cap)*100).toFixed(2):0;
+  $('k-daily-pnl-sub').textContent=(dpnl>=0?'+':'')+dpct+'% today';
+
+  const wr=d.win_rate||0;
+  $('k-winrate').textContent=pct(wr);
+  $('k-trades').textContent=(d.win_count||0)+'W / '+(d.loss_count||0)+'L';
+
+  $('k-positions').textContent=d.open_positions??'—';
+  $('k-pending').textContent=(d.pending_signals||0)+' pending signals';
+
+  $('k-best').textContent=money(d.best_trade||0);
+  $('k-best').className='kpi-value '+(( d.best_trade||0)>=0?'pos-green':'pos-red');
+  $('k-worst').textContent='worst: '+money(d.worst_trade||0);
+
+  /* circuit breaker */
+  const cb=d.circuit_breaker||{{}};
+  const cbHalt=cb.halted||false;
+  $('cb-status').textContent='Circuit Breaker: '+(cbHalt?'HALTED ⚠':'OK');
+  $('cb-status').style.color=cbHalt?'var(--red)':'var(--green)';
+
+  /* DB badge */
+  $('db-badge').textContent='DB: '+(d.db_ok?'Connected':'Error');
+  $('db-badge').style.color=d.db_ok?'var(--green)':'var(--red)';
+
+  /* P&L chart — append new point if value changed */
+  const lastVal=pnlHistory[pnlHistory.length-1].value;
+  if(totalPnl!==lastVal){{
+    const lbl=d.market_time?d.market_time.slice(11,16):'now';
+    pnlHistory.push({{label:lbl,value:totalPnl}});
+    if(pnlHistory.length>100)pnlHistory.shift();
+    pnlChart.data.labels=pnlHistory.map(p=>p.label);
+    pnlChart.data.datasets[0].data=pnlHistory.map(p=>p.value);
+    pnlChart.update('none');
+  }}
+
+  /* Win/Loss donut */
+  const wins=d.win_count||0,losses=d.loss_count||0;
+  if(wins+losses>0){{
+    winChart.data.labels=['Wins','Losses'];
+    winChart.data.datasets[0].data=[wins,losses];
+    winChart.data.datasets[0].backgroundColor=['#a6e3a1','#f38ba8'];
+    winChart.data.datasets[0].borderColor=['#a6e3a1','#f38ba8'];
+  }}else{{
+    winChart.data.labels=['No trades'];
+    winChart.data.datasets[0].data=[1];
+    winChart.data.datasets[0].backgroundColor=['#1e2330'];
+    winChart.data.datasets[0].borderColor=['#1e2330'];
+  }}
+  winChart.update('none');
+
+  /* tables */
+  const posKeys=Object.keys(d.positions||{{}});
+  $('pos-badge').textContent=posKeys.length;
+  $('positions-body').innerHTML=renderPositions(d.positions);
+
+  $('sig-badge').textContent=(d.signals||[]).length;
+  $('signals-body').innerHTML=renderSignals(d.signals);
+
+  $('act-badge').textContent=(d.activity||[]).length;
+  $('activity-body').innerHTML=renderActivity(d.activity);
+}}
 
 const es=new EventSource('/stream');
-es.onmessage=ev=>{try{update(JSON.parse(ev.data))}catch(err){console.error(err)}};
-es.onerror=()=>setTimeout(()=>location.reload(),5000);
+es.onmessage=ev=>{{try{{update(JSON.parse(ev.data))}}catch(err){{console.error(err)}}}};
+es.onerror=()=>{{$('nav-time').textContent='reconnecting...';setTimeout(()=>location.reload(),5000)}};
 </script>
 </body></html>"""
         return web.Response(text=html, content_type="text/html")
