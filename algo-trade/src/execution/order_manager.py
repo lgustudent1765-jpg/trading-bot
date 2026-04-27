@@ -77,7 +77,9 @@ class OrderManager:
             )
             return
 
-        if self._mode == "manual":
+        # Read mode from live config so UI changes take effect without restart
+        live_mode = self._config.get("mode", self._mode).lower()
+        if live_mode == "manual":
             log.info(
                 "TRADE RECOMMENDATION (manual — not executed)",
                 symbol=plan.symbol,
@@ -171,6 +173,8 @@ class OrderManager:
             stop=plan.stop_loss,
             target=plan.take_profit,
         )
+        _contract_miss_count = 0
+        _MAX_CONTRACT_MISSES = 30  # 5 minutes at 10s poll before giving up
         while True:
             await asyncio.sleep(_STOP_POLL_INTERVAL)
             try:
@@ -194,7 +198,16 @@ class OrderManager:
                     None,
                 )
                 if contract is None:
+                    _contract_miss_count += 1
+                    if _contract_miss_count >= _MAX_CONTRACT_MISSES:
+                        log.warning(
+                            "stop monitor: contract not found after max retries — exiting monitor",
+                            option_symbol=option_symbol,
+                            misses=_contract_miss_count,
+                        )
+                        return
                     continue
+                _contract_miss_count = 0  # reset on successful lookup
 
                 mid = contract.mid_price
                 exit_reason: Optional[str] = None

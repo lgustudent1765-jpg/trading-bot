@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 
@@ -40,7 +40,7 @@ class MarketQuote:
     price: float
     change_pct: float
     volume: int
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -48,7 +48,7 @@ class CandidateEvent:
     """Published by the screener when top-movers are refreshed."""
     gainers: List[MarketQuote]
     losers: List[MarketQuote]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -82,7 +82,7 @@ class OptionChainEvent:
     """Option chain after liquidity filtering for a given symbol."""
     symbol: str
     contracts: List[OptionContract]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -106,14 +106,14 @@ class TradePlan:
     macd_hist: float = 0.0
     rationale: str = ""
     strategy_name: str = ""
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
 class SignalEvent:
     """Emitted by the strategy engine; carries a fully-formed TradePlan."""
     trade_plan: TradePlan
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -132,7 +132,7 @@ class OrderEvent:
 
     def transition(self, new_status: OrderStatus) -> None:
         self.status = new_status
-        self.timestamps[new_status.value] = datetime.utcnow()
+        self.timestamps[new_status.value] = datetime.now(timezone.utc)
 
 
 @dataclass
@@ -144,4 +144,4 @@ class FillEvent:
     side: OrderSide
     quantity: int
     avg_fill_price: float
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

@@ -442,7 +442,7 @@ def create_app(
                 _set(path, val)
 
         if not updates:
-            return web.json_response({"error": "no recognised fields"}, status=400)
+            return web.json_response({"ok": True, "changed": False})
 
         # 1. Persist to DB (survives Railway redeployments)
         if position_store:
@@ -523,13 +523,13 @@ def create_app(
                 payload = {"from": user, "to": [recipient], "subject": "[AlgoTrade] Test Email", "text": body_text}
 
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
 
                 def _http_send():
                     data = _json.dumps(payload).encode()
                     req  = _urlreq.Request(url, data=data, headers=headers, method="POST")
                     with _urlreq.urlopen(req, timeout=15) as resp:
-                        return resp.getcode(), resp.read().decode()
+                        return resp.getcode(), resp.read().decode(errors="replace")
 
                 status_code, resp_body = await loop.run_in_executor(None, _http_send)
                 if status_code not in (200, 201, 202):
@@ -554,7 +554,7 @@ def create_app(
             msg["To"]      = recipient
 
             context = _ssl.create_default_context()
-            loop    = asyncio.get_event_loop()
+            loop    = asyncio.get_running_loop()
 
             def _send():
                 if smtp_port == 465:
@@ -776,7 +776,7 @@ def create_app(
             from src.config import get_config
             cfg = get_config()
             bt  = Backtester(cfg)
-            result = await _aio.get_event_loop().run_in_executor(None, bt.run_from_bars, bars)
+            result = await _aio.get_running_loop().run_in_executor(None, bt.run_from_bars, bars)
             summary = result.summary()
 
             # Build equity curve from trade sequence

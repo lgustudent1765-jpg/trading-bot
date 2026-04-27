@@ -236,8 +236,8 @@ export default function SettingsPage() {
       setSaved((s) => ({ ...s, [section]: true }));
       setTimeout(() => setSaved((s) => ({ ...s, [section]: false })), 2500);
       await load(); // H-3/L-1: re-sync fmp_api_key_set and all state from backend
-    } catch {
-      setSaveError("Save failed — check that the backend is running.");
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Save failed — check that the backend is running.");
     } finally {
       setSaving((s) => ({ ...s, [section]: false }));
     }

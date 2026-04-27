@@ -49,8 +49,11 @@ def _attach_shutdown(loop: asyncio.AbstractEventLoop, tasks: list) -> None:
         try:
             loop.add_signal_handler(sig, _shutdown)
         except NotImplementedError:
-            # Windows does not support add_signal_handler for all signals.
-            pass
+            # Windows: fall back to signal.signal for SIGINT (Ctrl+C)
+            try:
+                signal.signal(sig, lambda *_: loop.call_soon_threadsafe(_shutdown))
+            except (OSError, ValueError):
+                pass
 
 
 async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
@@ -165,7 +168,10 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
         task_list.extend(tasks)
         _attach_shutdown(loop, tasks)
         try:
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                    log.error("pipeline task failed", error=str(result), exc_info=result)
         except asyncio.CancelledError:
             pass
         finally:

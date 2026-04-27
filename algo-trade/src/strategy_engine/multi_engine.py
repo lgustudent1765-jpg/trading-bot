@@ -102,7 +102,7 @@ class MultiStrategyEngine:
         try:
             return strategy.generate_signal(symbol, bars, contracts, self._config)
         except Exception as exc:
-            log.debug("strategy error", strategy=strategy.name, symbol=symbol, error=str(exc))
+            log.warning("strategy error", strategy=strategy.name, symbol=symbol, error=str(exc))
             return None
 
     async def _process_chain(self, event: OptionChainEvent) -> None:

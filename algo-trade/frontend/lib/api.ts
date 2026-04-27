@@ -116,11 +116,17 @@ export const api = {
   history:      (limit = 50)              => fetchJSON<Action[]>(`/history?limit=${limit}`),
   status:       ()                        => fetchJSON<StatusResponse>("/status"),
   getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
-  updateConfig: (payload: ConfigPayload)  => fetch(`${API_BASE}/config`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).then((r) => { if (!r.ok) throw new Error(`config update failed: ${r.status}`); }),
+  updateConfig: async (payload: ConfigPayload) => {
+    const r = await fetch(`${API_BASE}/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `Config update failed (${r.status})`);
+    }
+  },
   testEmail:    ()                        => fetch(`${API_BASE}/config/test-email`, {
     method: "POST",
   }).then((r) => r.json() as Promise<{ ok?: boolean; recipient?: string; error?: string }>),
