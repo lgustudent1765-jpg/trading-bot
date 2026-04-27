@@ -175,17 +175,19 @@ class TestBuildTradePlan:
         plan = engine._build_trade_plan("AAPL", SignalDirection.CALL, contract, 1.20, 72.0, 0.08)
         assert plan.take_profit > plan.entry_limit
 
-    def test_put_stop_is_above_entry(self, e2e_config, make_contract):
+    def test_put_stop_is_below_entry(self, e2e_config, make_contract):
+        """Long put: stop < entry (option premium drops on loss)."""
         engine = self._engine(e2e_config)
         contract = make_contract(ask=3.00, option_type="put")
         plan = engine._build_trade_plan("AAPL", SignalDirection.PUT, contract, 1.20, 28.0, -0.08)
-        assert plan.stop_loss > plan.entry_limit
+        assert plan.stop_loss < plan.entry_limit
 
-    def test_put_target_is_below_entry(self, e2e_config, make_contract):
+    def test_put_target_is_above_entry(self, e2e_config, make_contract):
+        """Long put: target > entry (option premium rises on profit)."""
         engine = self._engine(e2e_config)
         contract = make_contract(ask=3.00, option_type="put")
         plan = engine._build_trade_plan("AAPL", SignalDirection.PUT, contract, 1.20, 28.0, -0.08)
-        assert plan.take_profit < plan.entry_limit
+        assert plan.take_profit > plan.entry_limit
 
     def test_trade_plan_contains_rsi_and_macd_hist(self, e2e_config, make_contract):
         engine = self._engine(e2e_config)

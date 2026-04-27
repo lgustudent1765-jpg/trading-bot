@@ -486,6 +486,15 @@ def create_app(
                 _set(path, val)
 
         if not updates:
+            known_keys = (
+                set(mapping)
+                | set(_ENUM_FIELDS)
+                | _POSITIVE_INT_FIELDS
+                | _POSITIVE_INT_FIELDS_EXTENDED
+                | _POSITIVE_FLOAT_FIELDS
+            )
+            if not any(k in known_keys for k in body):
+                return web.json_response({"error": "no recognized configuration fields"}, status=400)
             return web.json_response({"ok": True, "changed": False})
 
         # 1. Persist to DB (survives Railway redeployments)

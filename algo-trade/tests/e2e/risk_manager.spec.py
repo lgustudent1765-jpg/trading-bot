@@ -65,13 +65,15 @@ def _call_plan(entry=2.50, stop=1.80, target=4.20) -> TradePlan:
     )
 
 
-def _put_plan(entry=3.00, stop=4.50, target=1.50) -> TradePlan:
+def _put_plan(entry=3.00, stop=1.50, target=4.50) -> TradePlan:
+    # Long put: we BUY the option. stop/TP are option-premium levels.
+    # stop < entry < target — same layout as any long option.
     return make_trade_plan(
         symbol="SPY",
         direction=SignalDirection.PUT,
         entry_limit=entry,
-        stop_loss=stop,   # for PUT: stop > entry is correct
-        take_profit=target,  # for PUT: target < entry is correct
+        stop_loss=stop,
+        take_profit=target,
     )
 
 
@@ -216,28 +218,28 @@ class TestApproveCall:
 
 class TestApprovePut:
     def test_valid_put_plan_is_approved(self):
-        """For PUT: target < entry < stop is the correct relationship."""
+        """Long put: stop < entry < target — same as any long option."""
         rm = _rm()
-        plan = _put_plan(entry=3.00, stop=4.50, target=1.50)
+        plan = _put_plan(entry=3.00, stop=1.50, target=4.50)
         assert rm.approve(plan, equity=100_000)[0] is True
 
     def test_valid_put_sets_position_size(self):
         rm = _rm(max_pos_pct=0.05)
-        plan = _put_plan(entry=3.00, stop=4.50, target=1.50)
+        plan = _put_plan(entry=3.00, stop=1.50, target=4.50)
         rm.approve(plan, equity=100_000)
         expected = int((100_000 * 0.05) // (3.00 * 100))
         assert plan.position_size == expected
 
-    def test_put_inverted_stop_below_entry_rejected(self):
-        """PUT: stop must be > entry. Inverted stop (stop < entry) → rejected."""
+    def test_put_inverted_stop_above_entry_rejected(self):
+        """Long put: stop must be < entry. stop > entry is invalid."""
         rm = _rm()
-        plan = _put_plan(entry=3.00, stop=2.00, target=1.50)  # stop < entry: invalid
+        plan = _put_plan(entry=3.00, stop=4.50, target=5.50)  # stop > entry: invalid
         assert rm.approve(plan, equity=100_000)[0] is False
 
-    def test_put_inverted_target_above_entry_rejected(self):
-        """PUT: target must be < entry. Inverted target (target > entry) → rejected."""
+    def test_put_inverted_target_below_entry_rejected(self):
+        """Long put: target must be > entry. target < entry is invalid."""
         rm = _rm()
-        plan = _put_plan(entry=3.00, stop=4.50, target=4.00)  # target > entry: invalid
+        plan = _put_plan(entry=3.00, stop=1.50, target=1.00)  # target < entry: invalid
         assert rm.approve(plan, equity=100_000)[0] is False
 
 
