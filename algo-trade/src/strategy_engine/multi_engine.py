@@ -300,11 +300,10 @@ class MultiStrategyEngine:
         if market_bias is not None:
             aligned = [c for c in candidates if c.direction == market_bias]
             if aligned:
+                # Prefer trend-aligned signals when available.
                 candidates = aligned
-            else:
-                log.debug("all signals against market trend, skipping",
-                          symbol=symbol, bias=market_bias.value)
-                return None
+            # If no aligned signals, allow counter-trend signals through —
+            # individual stocks can diverge strongly from SPY (e.g. earnings, sector news).
 
         return self._pick_winner(candidates, self._get_scores())
 

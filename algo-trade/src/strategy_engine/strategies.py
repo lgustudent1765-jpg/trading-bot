@@ -107,16 +107,23 @@ def _vwap(bars: List[Dict]) -> float:
 def _volume_confirmed(bars: List[Dict], lookback: int = 20, mult: float = 1.2) -> bool:
     """Return True if the last bar's volume is at least mult × average of prior bars.
 
-    Keeps signals to bars where volume confirms the move (institutional participation).
+    Skips the check when the last bar has zero volume (market closed / weekend data).
     Returns True when there is insufficient history to compute a baseline.
     """
     if len(bars) < lookback + 1:
         return True
-    prior_vols = [b.get("volume", 0) for b in bars[-lookback - 1:-1]]
-    avg = sum(prior_vols) / len(prior_vols)
+    last_vol = bars[-1].get("volume", 0)
+    if last_vol == 0:
+        # Market is closed or the bar has no volume — use second-to-last bar.
+        prior_bars = bars[-lookback - 2:-2]
+        last_vol = bars[-2].get("volume", 0) if len(bars) >= 2 else 0
+    else:
+        prior_bars = bars[-lookback - 1:-1]
+    prior_vols = [b.get("volume", 0) for b in prior_bars]
+    avg = sum(prior_vols) / len(prior_vols) if prior_vols else 0
     if avg == 0:
         return True
-    return bars[-1].get("volume", 0) >= mult * avg
+    return last_vol >= mult * avg
 
 
 def _select_contract(

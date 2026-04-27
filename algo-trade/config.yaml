@@ -18,7 +18,7 @@ circuit_breaker:
   daily_profit_target_pct: 0.3
 confirmation:
   expire_minutes: 10
-  wait_bars: 2
+  wait_bars: 1
 daily_limits:
   loss_limit: 200.0
   profit_target: 500.0
@@ -69,10 +69,10 @@ options_filter:
   min_open_interest: 500
   min_volume: 100
 paper_trading:
-  initial_capital: 1000
+  initial_capital: 25000
 risk:
   max_open_positions: 5
-  max_position_pct: 0.05
+  max_position_pct: 0.10
   pdt_equity_threshold: 25000
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 3.0

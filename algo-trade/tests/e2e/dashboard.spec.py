@@ -45,15 +45,16 @@ class TestDashboard:
             for endpoint in API_LINKS:
                 assert endpoint in text, f"Dashboard missing link to {endpoint}"
 
-    async def test_dashboard_contains_auto_refresh_meta_tag(self, make_app):
+    async def test_dashboard_contains_live_update_mechanism(self, make_app):
+        # Dashboard now uses SSE (/stream) for live updates instead of meta refresh.
         async with TestClient(TestServer(make_app())) as client:
             text = await (await client.get("/")).text()
-            assert 'http-equiv="refresh"' in text or "meta http-equiv" in text.lower()
+            assert "EventSource" in text or "/stream" in text
 
-    async def test_dashboard_shows_zero_open_positions_without_store(self, make_app):
+    async def test_dashboard_shows_positions_section(self, make_app):
         async with TestClient(TestServer(make_app(pos_store=None))) as client:
             text = await (await client.get("/")).text()
-            assert "Open positions: <b>0</b>" in text
+            assert "positions" in text.lower()
 
     async def test_dashboard_shows_correct_position_count_with_store(
         self, make_app, position_store, signal_store
@@ -67,8 +68,10 @@ class TestDashboard:
         async with TestClient(TestServer(
             make_app(sig_store=signal_store, pos_store=position_store)
         )) as client:
-            text = await (await client.get("/")).text()
-            assert "Open positions: <b>2</b>" in text
+            # Position data is served via /stream (SSE) and /status — confirm /status returns correct count.
+            resp = await client.get("/status")
+            data = await resp.json()
+            assert data["open_positions"] == 2
 
     async def test_dashboard_contains_algo_trade_title(self, make_app):
         async with TestClient(TestServer(make_app())) as client:

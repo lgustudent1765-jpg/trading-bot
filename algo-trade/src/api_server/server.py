@@ -166,142 +166,194 @@ def create_app(
             "recent_actions":    list(reversed(_action_store[-30:])),
         })
 
+    async def sse_stream(request: web.Request) -> web.StreamResponse:
+        """Server-Sent Events endpoint — pushes /status JSON every 5 seconds."""
+        resp = web.StreamResponse(headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await resp.prepare(request)
+        try:
+            while True:
+                cfg        = get_config()
+                open_count = position_store.open_count if position_store else 0
+                db_ok      = position_store.check_connection() if position_store else False
+                positions  = position_store.get_positions() if position_store else {}
+                sigs       = signal_store[-20:] if signal_store else []
+                acts       = list(reversed(_action_store[-30:])) if _action_store else []
+
+                import json as _json
+                payload = _json.dumps({
+                    "market_open":    is_market_open(),
+                    "market_time":    now_et().strftime("%Y-%m-%d %H:%M:%S ET"),
+                    "mode":           cfg.get("mode", "paper"),
+                    "open_positions": open_count,
+                    "signal_count":   len(signal_store),
+                    "db_ok":          db_ok,
+                    "uptime_s":       round(time.time() - _START_TIME),
+                    "signals":        sigs,
+                    "positions":      positions,
+                    "activity":       acts,
+                })
+                await resp.write(f"data: {payload}\n\n".encode())
+                await asyncio.sleep(5)
+        except (asyncio.CancelledError, ConnectionResetError):
+            pass
+        return resp
+
     async def dashboard(request: web.Request) -> web.Response:
-        open_count = position_store.open_count if position_store else 0
-        market_status = "OPEN" if is_market_open() else "CLOSED"
-        market_color  = "#00ff00" if is_market_open() else "#ff4444"
+        cfg = get_config()
+        mode = cfg.get("mode", "paper")
+        mode_label = mode.upper()
+        mode_warn = "" if mode == "automated" else f'<div class="warn">&#9888; {mode_label} MODE — {"No real orders are placed" if mode == "paper" else "Manual approval required"}</div>'
 
-        # Build signals table rows
-        recent_signals = signal_store[-20:] if signal_store else []
-        if recent_signals:
-            sig_rows = ""
-            for s in reversed(recent_signals):
-                _direction = str(s.get("direction", s.get("side", ""))).upper()
-                side_color = "#00ff00" if _direction in ("BUY", "CALL") else "#ff4444"
-                _e = lambda v: _html.escape(str(v))
-                sig_rows += (
-                    f"<tr>"
-                    f"<td>{_e(s.get('ts', s.get('timestamp', s.get('time', '—'))))}</td>"
-                    f"<td><b>{_e(s.get('symbol', '—'))}</b></td>"
-                    f"<td style='color:{side_color}'>{_e(s.get('direction', s.get('side', s.get('action', '—'))).upper())}</td>"
-                    f"<td>{_e(s.get('entry', s.get('price', s.get('entry_price', '—'))))}</td>"
-                    f"<td>{_e(s.get('size', s.get('quantity', s.get('qty', '—'))))}</td>"
-                    f"<td style='color:#aaa'>{_e(s.get('rationale', s.get('strategy', s.get('reason', '—'))))}</td>"
-                    f"</tr>"
-                )
-            signals_html = f"""
-<div class="card">
-  <b>Recent Signals</b> <span style="color:#555;font-size:0.8em">(last {len(recent_signals)})</span>
-  <table style="margin-top:10px">
-    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th><th>Strategy</th></tr></thead>
-    <tbody>{sig_rows}</tbody>
-  </table>
-</div>"""
-        else:
-            signals_html = '<div class="card"><b>Recent Signals</b><p style="color:#555;margin:8px 0 0">No signals yet.</p></div>'
-
-        # Build activity log rows
-        recent_actions = list(reversed(_action_store[-30:])) if _action_store else []
-        _EVENT_COLORS = {
-            "ORDER_FILLED":     "#00ff00",
-            "POSITION_CLOSED":  "#ffaa00",
-            "SIGNAL_REJECTED":  "#ff4444",
-            "SYSTEM_STARTED":   "#00aaff",
-            "SYSTEM_STOPPED":   "#888888",
-        }
-        if recent_actions:
-            action_rows = ""
-            for a in recent_actions:
-                ev = str(a.get("event", ""))
-                color = _EVENT_COLORS.get(ev, "#aaaaaa")
-                sym = _html.escape(str(a.get("symbol") or "—"))
-                ts  = _html.escape(str(a.get("ts", "—"))[:19].replace("T", " "))
-                action_rows += (
-                    f"<tr>"
-                    f"<td style='color:#555'>{ts}</td>"
-                    f"<td style='color:{color};font-weight:bold'>{_html.escape(ev)}</td>"
-                    f"<td><b>{sym}</b></td>"
-                    f"<td style='color:#ccc'>{_html.escape(str(a.get('detail', '—')))}</td>"
-                    f"</tr>"
-                )
-            activity_html = f"""
-<div class="card">
-  <b>Activity Log</b> <span style="color:#555;font-size:0.8em">(last {len(recent_actions)} events)</span>
-  <table style="margin-top:10px">
-    <thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Detail</th></tr></thead>
-    <tbody>{action_rows}</tbody>
-  </table>
-</div>"""
-        else:
-            activity_html = '<div class="card"><b>Activity Log</b><p style="color:#555;margin:8px 0 0">No activity yet.</p></div>'
-
-        # Build positions table rows
-        positions = position_store.get_positions() if position_store else {}
-        if positions:
-            pos_rows = ""
-            for sym, pos in positions.items():
-                pnl = pos.get("unrealized_pnl", pos.get("pnl", "—"))
-                pnl_color = "#00ff00" if isinstance(pnl, (int, float)) and pnl >= 0 else "#ff4444"
-                pos_rows += (
-                    f"<tr>"
-                    f"<td><b>{sym}</b></td>"
-                    f"<td>{pos.get('quantity', pos.get('qty', '—'))}</td>"
-                    f"<td>{pos.get('entry_price', pos.get('avg_price', '—'))}</td>"
-                    f"<td>{pos.get('current_price', pos.get('underlying_price', '—'))}</td>"
-                    f"<td style='color:{pnl_color}'>{pnl}</td>"
-                    f"</tr>"
-                )
-            positions_html = f"""
-<div class="card">
-  <b>Open Positions</b> <span style="color:#555;font-size:0.8em">({len(positions)})</span>
-  <table style="margin-top:10px">
-    <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th><th>Unrealized P&L</th></tr></thead>
-    <tbody>{pos_rows}</tbody>
-  </table>
-</div>"""
-        else:
-            positions_html = '<div class="card"><b>Open Positions</b><p style="color:#555;margin:8px 0 0">No open positions.</p></div>'
-
-        html = f"""<!DOCTYPE html>
-<html><head><title>Algo-Trade Dashboard</title>
-<meta http-equiv="refresh" content="30">
+        html = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Algo-Trade Dashboard</title>
 <style>
-  body{{font-family:monospace;background:#0a0a0a;color:#00ff00;padding:20px;max-width:1200px;margin:0 auto;}}
-  h2{{color:#00ff00;border-bottom:1px solid #00ff00;padding-bottom:8px;}}
-  .card{{background:#111;border:1px solid #333;padding:15px;margin:10px 0;border-radius:4px;}}
-  .status{{color:{market_color};font-weight:bold;font-size:1.2em;}}
-  a{{color:#00aaff;text-decoration:none;}} a:hover{{text-decoration:underline;}}
-  table{{border-collapse:collapse;width:100%;margin-top:8px;}}
-  th,td{{border:1px solid #222;padding:6px 12px;text-align:left;font-size:0.9em;}}
-  th{{background:#1a1a1a;color:#aaa;}}
-  tr:hover td{{background:#161616;}}
-  .warn{{color:#ffaa00;padding:10px;border:1px solid #ffaa00;margin:10px 0;border-radius:4px;}}
-  .grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px;}}
-  @media(max-width:700px){{.grid{{grid-template-columns:1fr;}}}}
-</style></head>
-<body>
-<h2>Algo-Trade Paper-Trade Dashboard</h2>
-<div class="warn">&#9888; PAPER TRADE MODE — No real orders are placed</div>
-    <div class="card">
-  <span class="status">Market: {market_status}</span> &nbsp;|&nbsp;
-  {now_et().strftime("%Y-%m-%d %H:%M:%S ET")} &nbsp;|&nbsp;
-  Open positions: <b>{open_count}</b> &nbsp;|&nbsp;
-  Signals: <b>{len(signal_store)}</b> &nbsp;|&nbsp;
-  Database: <b>{"CONNECTED" if (position_store.check_connection() if position_store else False) else "DISCONNECTED"}</b> &nbsp;|&nbsp;
-  Uptime: {round(time.time() - _START_TIME)}s
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Courier New',monospace;background:#0a0a0a;color:#c9d1d9;min-height:100vh;padding:16px}
+  h1{color:#58a6ff;font-size:1.3em;margin-bottom:12px;border-bottom:1px solid #21262d;padding-bottom:8px}
+  .topbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center}
+  .badge{background:#161b22;border:1px solid #30363d;padding:4px 10px;border-radius:6px;font-size:.82em}
+  .badge b{margin-left:4px}
+  .market-open{color:#3fb950} .market-closed{color:#f85149}
+  .call{color:#3fb950;font-weight:bold} .put{color:#f85149;font-weight:bold}
+  .pnl-pos{color:#3fb950} .pnl-neg{color:#f85149}
+  .card{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:14px;margin-bottom:10px}
+  .card-title{color:#58a6ff;font-size:.9em;font-weight:bold;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+  .count{background:#21262d;color:#8b949e;font-size:.75em;padding:2px 7px;border-radius:10px}
+  table{width:100%;border-collapse:collapse;font-size:.82em}
+  th{background:#161b22;color:#8b949e;padding:6px 10px;text-align:left;border-bottom:1px solid #21262d}
+  td{padding:6px 10px;border-bottom:1px solid #161b22;color:#c9d1d9}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#161b22}
+  .empty{color:#484f58;font-style:italic;padding:12px 0;text-align:center}
+  .warn{color:#d29922;padding:8px 12px;border:1px solid #d29922;border-radius:6px;margin-bottom:10px;font-size:.85em}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot-green{background:#3fb950} .dot-red{background:#f85149}
+  .live{color:#3fb950;font-size:.75em;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:700px){.grid2{grid-template-columns:1fr}}
+  .ev-FILLED,.ev-CLOSED{color:#3fb950}
+  .ev-REJECTED{color:#f85149}
+  .ev-STARTED{color:#58a6ff}
+  .ev-default{color:#8b949e}
+</style>
+</head><body>
+<h1>&#9650; Algo-Trade Dashboard <span class="live">&#11044; LIVE</span></h1>
+""" + mode_warn + """
+<div class="topbar" id="topbar">
+  <span class="badge">Market: <b id="mkt">—</b></span>
+  <span class="badge">Time: <b id="mkt-time">—</b></span>
+  <span class="badge">Mode: <b id="mode">—</b></span>
+  <span class="badge">Positions: <b id="pos-count">—</b></span>
+  <span class="badge">Signals: <b id="sig-count">—</b></span>
+  <span class="badge">DB: <b id="db">—</b></span>
+  <span class="badge">Uptime: <b id="uptime">—</b></span>
 </div>
-{signals_html}
-{positions_html}
-{activity_html}
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-title">Open Positions <span class="count" id="pos-badge">0</span></div>
+    <div id="positions-body"><p class="empty">No open positions.</p></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Recent Signals <span class="count" id="sig-badge">0</span></div>
+    <div id="signals-body"><p class="empty">No signals yet.</p></div>
+  </div>
+</div>
+
 <div class="card">
-  <b>API Endpoints:</b> &nbsp;
-  <a href="/health">/health</a> &nbsp;
-  <a href="/signals">/signals</a> &nbsp;
-  <a href="/positions">/positions</a> &nbsp;
-  <a href="/metrics">/metrics</a> &nbsp;
-  <a href="/history">/history</a>
+  <div class="card-title">Activity Log <span class="count" id="act-badge">0</span></div>
+  <div id="activity-body"><p class="empty">No activity yet.</p></div>
 </div>
-<p style="color:#555;font-size:0.8em">Auto-refreshes every 30 seconds.</p>
+
+<div class="card" style="font-size:.8em;color:#484f58">
+  API: <a href="/health" style="color:#58a6ff">/health</a>
+  &nbsp;<a href="/signals" style="color:#58a6ff">/signals</a>
+  &nbsp;<a href="/positions" style="color:#58a6ff">/positions</a>
+  &nbsp;<a href="/metrics" style="color:#58a6ff">/metrics</a>
+  &nbsp;<a href="/status" style="color:#58a6ff">/status</a>
+</div>
+
+<script>
+function e(v){const d=document.createElement('div');d.textContent=String(v??'—');return d.textContent}
+function fmt(ts){return ts?String(ts).slice(0,19).replace('T',' '):'—'}
+
+function renderPositions(pos){
+  const keys=Object.keys(pos||{});
+  if(!keys.length)return'<p class="empty">No open positions.</p>';
+  let h='<table><thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Direction</th><th>Stop</th><th>Target</th></tr></thead><tbody>';
+  for(const k of keys){
+    const p=pos[k];
+    const dir=(p.direction||'').toUpperCase();
+    h+=`<tr><td><b>${e(k)}</b></td><td>${e(p.quantity)}</td><td>${e(p.entry_price)}</td>
+        <td class="${dir==='CALL'?'call':'put'}">${e(dir)}</td>
+        <td>${e(p.stop_loss)}</td><td>${e(p.take_profit)}</td></tr>`;
+  }
+  return h+'</tbody></table>';
+}
+
+function renderSignals(sigs){
+  if(!sigs||!sigs.length)return'<p class="empty">No signals yet.</p>';
+  let h='<table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Strategy</th></tr></thead><tbody>';
+  for(const s of [...sigs].reverse()){
+    const dir=(s.direction||'').toUpperCase();
+    h+=`<tr><td style="color:#484f58">${fmt(s.ts)}</td><td><b>${e(s.symbol)}</b></td>
+        <td class="${dir==='CALL'?'call':'put'}">${e(dir)}</td>
+        <td>${e(s.entry)}</td><td style="color:#8b949e">${e(s.strategy)}</td></tr>`;
+  }
+  return h+'</tbody></table>';
+}
+
+function evClass(ev){
+  if(ev.includes('FILL')||ev.includes('CLOSED'))return'ev-FILLED';
+  if(ev.includes('REJECT'))return'ev-REJECTED';
+  if(ev.includes('START'))return'ev-STARTED';
+  return'ev-default';
+}
+
+function renderActivity(acts){
+  if(!acts||!acts.length)return'<p class="empty">No activity yet.</p>';
+  let h='<table><thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Detail</th></tr></thead><tbody>';
+  for(const a of acts){
+    h+=`<tr><td style="color:#484f58">${fmt(a.ts)}</td>
+        <td class="${evClass(a.event||'')}">${e(a.event)}</td>
+        <td><b>${e(a.symbol)}</b></td>
+        <td style="color:#8b949e">${e(a.detail)}</td></tr>`;
+  }
+  return h+'</tbody></table>';
+}
+
+function update(d){
+  const open=d.market_open;
+  document.getElementById('mkt').innerHTML=`<span class="${open?'market-open':'market-closed'}">${open?'OPEN':'CLOSED'}</span>`;
+  document.getElementById('mkt-time').textContent=d.market_time||'—';
+  document.getElementById('mode').textContent=(d.mode||'—').toUpperCase();
+  document.getElementById('pos-count').textContent=d.open_positions??'—';
+  document.getElementById('sig-count').textContent=d.signal_count??'—';
+  document.getElementById('db').innerHTML=d.db_ok?'<span class="market-open">OK</span>':'<span class="market-closed">ERR</span>';
+  document.getElementById('uptime').textContent=d.uptime_s!=null?d.uptime_s+'s':'—';
+
+  const posKeys=Object.keys(d.positions||{});
+  document.getElementById('pos-badge').textContent=posKeys.length;
+  document.getElementById('positions-body').innerHTML=renderPositions(d.positions);
+
+  document.getElementById('sig-badge').textContent=(d.signals||[]).length;
+  document.getElementById('signals-body').innerHTML=renderSignals(d.signals);
+
+  document.getElementById('act-badge').textContent=(d.activity||[]).length;
+  document.getElementById('activity-body').innerHTML=renderActivity(d.activity);
+}
+
+const es=new EventSource('/stream');
+es.onmessage=ev=>{try{update(JSON.parse(ev.data))}catch(err){console.error(err)}};
+es.onerror=()=>setTimeout(()=>location.reload(),5000);
+</script>
 </body></html>"""
         return web.Response(text=html, content_type="text/html")
 
@@ -969,6 +1021,7 @@ def create_app(
     app.router.add_post("/config/test-email",    test_email_endpoint)
     app.router.add_get("/circuit-breaker",       get_circuit_breaker)
     app.router.add_get("/pending-signals",       get_pending_signals)
+    app.router.add_get("/stream",           sse_stream)
     app.router.add_get("/",                 dashboard)
     return app
 
