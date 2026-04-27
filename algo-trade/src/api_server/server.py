@@ -64,6 +64,7 @@ def create_app(
     market_adapter: Optional[Any] = None,
     action_store: Optional[List[Dict]] = None,
     broker_adapter: Optional[Any] = None,
+    strategy_engine: Optional[Any] = None,
 ) -> web.Application:
     _action_store: List[Dict] = action_store if action_store is not None else []
 
@@ -125,6 +126,7 @@ def create_app(
         return web.json_response(list(reversed(_action_store[-limit:])))
 
     async def get_status(request: web.Request) -> web.Response:
+        from src.daily_circuit_breaker import DailyCircuitBreaker
         cfg        = get_config()
         open_count = position_store.open_count if position_store else 0
         db_ok      = position_store.check_connection() if position_store else False
@@ -133,6 +135,8 @@ def create_app(
             "win_rate": 0.0, "avg_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
         }
         paper_capital = float(cfg.get("paper_trading", {}).get("initial_capital", 1000.0))
+        cb_status = DailyCircuitBreaker(cfg, position_store).status
+        pending_count = len(getattr(strategy_engine, "_pending", {})) if strategy_engine else 0
         return web.json_response({
             # system
             "uptime_s":          round(time.time() - _START_TIME, 1),
@@ -145,10 +149,13 @@ def create_app(
             "open_positions":    open_count,
             "signal_count":      len(signal_store),
             "action_count":      len(_action_store),
+            "pending_signals":   pending_count,
             # paper trading capital
             "paper_capital":     paper_capital,
             # p&l
             **pnl,
+            # circuit breaker
+            "circuit_breaker":   cb_status,
             # recent activity (newest first)
             "recent_actions":    list(reversed(_action_store[-30:])),
         })
@@ -858,6 +865,44 @@ def create_app(
         log.info("manual order placed", symbol=symbol, side=side, qty=qty, price=fill_price)
         return web.json_response({"ok": True, "detail": detail})
 
+    # ── Circuit breaker status ──────────────────────────────────────────────
+
+    async def get_circuit_breaker(request: web.Request) -> web.Response:
+        from src.daily_circuit_breaker import DailyCircuitBreaker
+        cfg = get_config()
+        cb  = DailyCircuitBreaker(cfg, position_store)
+        return web.json_response(cb.status)
+
+    # ── Pending signals (awaiting confirmation) ─────────────────────────────
+
+    async def get_pending_signals(request: web.Request) -> web.Response:
+        from datetime import timezone as _tz
+        if strategy_engine is None:
+            return web.json_response({"pending": []})
+        pending = getattr(strategy_engine, "_pending", {})
+        now = __import__("datetime").datetime.now(_tz.utc)
+        expire_min = float(
+            get_config().get("confirmation", {}).get("expire_minutes", 10)
+        )
+        result = []
+        for symbol, entry in pending.items():
+            first_seen = entry.get("first_seen_at")
+            elapsed    = (now - first_seen).total_seconds() if first_seen else 0
+            expires_in = max(0, expire_min * 60 - elapsed)
+            plan       = entry.get("plan")
+            result.append({
+                "symbol":               symbol,
+                "strategy":             entry.get("strategy_name", ""),
+                "direction":            entry.get("direction").value if entry.get("direction") else "",
+                "confirmations":        entry.get("confirmations", 0),
+                "confirmations_needed": getattr(strategy_engine, "_confirm_wait_bars", 2),
+                "strike":               plan.contract.strike if plan else None,
+                "entry":                plan.entry_limit if plan else None,
+                "first_seen_at":        first_seen.isoformat() if first_seen else None,
+                "expires_in_s":         round(expires_in),
+            })
+        return web.json_response({"pending": result})
+
     # ── Router ──────────────────────────────────────────────────────────────
 
     app = web.Application()
@@ -876,6 +921,8 @@ def create_app(
     app.router.add_get("/config",                get_config_endpoint)
     app.router.add_post("/config",               post_config_endpoint)
     app.router.add_post("/config/test-email",    test_email_endpoint)
+    app.router.add_get("/circuit-breaker",       get_circuit_breaker)
+    app.router.add_get("/pending-signals",       get_pending_signals)
     app.router.add_get("/",                 dashboard)
     return app
 

@@ -115,6 +115,8 @@ export const api = {
   }).then((r) => r.json() as Promise<BacktestResponse>),
   history:      (limit = 50)              => fetchJSON<Action[]>(`/history?limit=${limit}`),
   status:       ()                        => fetchJSON<StatusResponse>("/status"),
+  circuitBreaker: ()                      => fetchJSON<CircuitBreakerStatus>("/circuit-breaker"),
+  pendingSignals: ()                      => fetchJSON<PendingSignalsResponse>("/pending-signals"),
   getConfig:    ()                        => fetchJSON<ConfigPayload>("/config"),
   updateConfig: async (payload: ConfigPayload) => {
     const r = await fetch(`${API_BASE}/config`, {
@@ -215,6 +217,33 @@ export interface BacktestResponse {
   error?: string;
 }
 
+export interface CircuitBreakerStatus {
+  halted: boolean;
+  halt_reason: string;
+  daily_pnl: number;
+  daily_pnl_pct: number;
+  profit_target_pct: number;
+  loss_limit_pct: number;
+  starting_equity: number;
+  trading_date: string;
+}
+
+export interface PendingSignal {
+  symbol: string;
+  strategy: string;
+  direction: "CALL" | "PUT";
+  confirmations: number;
+  confirmations_needed: number;
+  strike: number | null;
+  entry: number | null;
+  first_seen_at: string;
+  expires_in_s: number;
+}
+
+export interface PendingSignalsResponse {
+  pending: PendingSignal[];
+}
+
 export interface StatusResponse {
   // system
   uptime_s: number;
@@ -227,6 +256,7 @@ export interface StatusResponse {
   open_positions: number;
   signal_count: number;
   action_count: number;
+  pending_signals: number;
   // paper trading starting capital
   paper_capital: number;
   // p&l
@@ -238,6 +268,8 @@ export interface StatusResponse {
   avg_pnl: number;
   best_trade: number;
   worst_trade: number;
+  // circuit breaker
+  circuit_breaker: CircuitBreakerStatus;
   // recent activity
   recent_actions: Action[];
 }

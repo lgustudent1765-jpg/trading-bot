@@ -147,7 +147,7 @@ async def _run_pipeline(config: Dict[str, Any], mode: str) -> None:
                 _signal_store.pop(0)
 
     api_cfg = config.get("api_server", {})
-    app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store, broker_adapter)
+    app = create_app(risk_manager, _signal_store, position_store, market_adapter, _action_store, broker_adapter, strategy_engine=engine)
 
     log.info("pipeline starting", mode=mode)
 

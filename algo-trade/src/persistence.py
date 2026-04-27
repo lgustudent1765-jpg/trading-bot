@@ -357,6 +357,26 @@ class PositionStore:
                 for r in records
             }
 
+    def get_daily_pnl(self) -> float:
+        """Sum P&L from POSITION_CLOSED actions since midnight UTC today."""
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        with self.SessionLocal() as session:
+            records = (
+                session.query(ActionRecord)
+                .filter(
+                    ActionRecord.event == "POSITION_CLOSED",
+                    ActionRecord.timestamp >= today_start,
+                )
+                .all()
+            )
+        total = 0.0
+        for r in records:
+            data = json.loads(r.data_json or "{}")
+            pnl = data.get("pnl")
+            if pnl is not None:
+                total += float(pnl)
+        return round(total, 2)
+
     def get_actions(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.SessionLocal() as session:
             records = (

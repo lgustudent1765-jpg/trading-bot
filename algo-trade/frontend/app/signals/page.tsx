@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { TrendingUp, TrendingDown, Zap, RefreshCw, Clock } from "lucide-react";
+import { TrendingUp, TrendingDown, Zap, RefreshCw, Clock, Hourglass } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { api, type Signal } from "@/lib/api";
+import { api, type Signal, type PendingSignal } from "@/lib/api";
 
 type DirectionFilter = "all" | "CALL" | "PUT";
 
@@ -18,15 +18,16 @@ function timeAgo(isoTs: string): string {
 
 export default function SignalsPage() {
   const [signals, setSignals]   = useState<Signal[]>([]);
+  const [pending, setPending]   = useState<PendingSignal[]>([]);
   const [loading, setLoading]   = useState(true);
   const [offline, setOffline]   = useState(false);
   const [filter, setFilter]     = useState<DirectionFilter>("all");
 
   const fetchData = useCallback(async () => {
     try {
-      const data = await api.signals(100);
-      // Show newest first
+      const [data, pData] = await Promise.all([api.signals(100), api.pendingSignals()]);
       setSignals([...data].reverse());
+      setPending(pData.pending);
       setOffline(false);
     } catch {
       setOffline(true);
@@ -51,6 +52,78 @@ export default function SignalsPage() {
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
           Backend offline — signals will appear once the trading engine is running.
         </div>
+      )}
+
+      {/* Pending confirmation panel */}
+      {pending.length > 0 && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-amber-400">
+              <Hourglass className="w-4 h-4" />
+              Awaiting Confirmation ({pending.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-amber-500/20">
+                    {["Symbol", "Direction", "Strategy", "Confirmations", "Strike", "Entry", "Expires In"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-left text-xs font-medium text-amber-500/70 uppercase tracking-wider whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-500/10">
+                  {pending.map((p) => (
+                    <tr key={`${p.symbol}-${p.first_seen_at}`} className="hover:bg-amber-500/5 transition-colors">
+                      <td className="px-4 py-2.5 font-medium text-zinc-100">{p.symbol}</td>
+                      <td className="px-4 py-2.5">
+                        <Badge variant={p.direction === "CALL" ? "success" : "danger"}>
+                          <span className="flex items-center gap-1">
+                            {p.direction === "CALL"
+                              ? <TrendingUp className="w-3 h-3" />
+                              : <TrendingDown className="w-3 h-3" />}
+                            {p.direction}
+                          </span>
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-zinc-400 text-xs">{p.strategy}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="flex gap-0.5">
+                            {Array.from({ length: p.confirmations_needed }).map((_, i) => (
+                              <div
+                                key={i}
+                                className={cn(
+                                  "w-3 h-3 rounded-full",
+                                  i < p.confirmations ? "bg-amber-400" : "bg-zinc-700"
+                                )}
+                              />
+                            ))}
+                          </div>
+                          <span className="text-xs text-zinc-500">
+                            {p.confirmations}/{p.confirmations_needed}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums text-zinc-300">
+                        {p.strike != null ? `$${p.strike.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums text-zinc-300">
+                        {p.entry != null ? `$${p.entry.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-amber-400 tabular-nums">
+                        {p.expires_in_s > 0 ? `${Math.floor(p.expires_in_s / 60)}m ${p.expires_in_s % 60}s` : "Expiring…"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Summary */}

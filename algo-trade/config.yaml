@@ -72,5 +72,11 @@ screener:
 trading_hours:
   start: "09:45"
   end: "15:30"
+confirmation:
+  wait_bars: 2          # signal must persist for 2 more chain events before executing
+  expire_minutes: 10    # discard unconfirmed signal after 10 min
+circuit_breaker:
+  daily_profit_target_pct: 0.30   # halt all trading if up 30% today
+  daily_loss_limit_pct: 0.20      # halt all trading if down 20% today
   provider: yahoo
   top_n: 10

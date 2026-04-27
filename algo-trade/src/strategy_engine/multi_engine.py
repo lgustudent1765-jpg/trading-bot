@@ -6,22 +6,34 @@ Selection logic:
   1. Score each strategy: 0.6 * win_rate + 0.4 * normalised_pnl
   2. No history yet → equal scores → round-robin tiebreak
   3. Highest-scoring strategy that produced a signal wins
+
+Signal confirmation:
+  - A signal must be seen on `confirmation.wait_bars` consecutive chain events
+    before it is published to the execution queue.
+  - Prevents acting on single-bar noise / overconfident one-off signals.
+
+Daily circuit breaker:
+  - Halts all new signal generation for the rest of the day if either
+    the daily profit target OR the daily loss limit is breached.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from src.daily_circuit_breaker import DailyCircuitBreaker
 from src.events import OptionChainEvent, SignalEvent, SignalDirection, TradePlan
 from src.logger import get_logger
 from src.market_adapter.base import MarketDataAdapter
 from src.strategy_engine.strategies import ALL_STRATEGIES, BaseStrategy
 
 log = get_logger(__name__)
+
+_PENDING_T = Dict[str, Any]  # symbol → pending-confirmation state
 
 
 class MultiStrategyEngine:
@@ -43,20 +55,34 @@ class MultiStrategyEngine:
         self._notifier       = notifier
         self._config         = config
         self._strategies: List[BaseStrategy] = ALL_STRATEGIES
-        self._rr_index: int = 0  # round-robin tiebreak counter
+        self._rr_index: int = 0
 
         ind = config.get("indicators", {})
-        self._lookback: int    = int(ind.get("lookback_bars", 50))
-        self._cooldown_min: int = int(ind.get("signal_cooldown_minutes", 30))
+        self._lookback: int     = int(ind.get("lookback_bars", 50))
+        self._cooldown_min: int = int(ind.get("signal_cooldown_minutes", 60))
+
+        conf = config.get("confirmation", {})
+        self._confirm_wait_bars: int    = int(conf.get("wait_bars", 2))
+        self._confirm_expire_min: float = float(conf.get("expire_minutes", 10))
+
+        # symbol → {plan, strategy_name, direction, confirmations, first_seen_at}
+        self._pending: Dict[str, _PENDING_T] = {}
+
+        self._circuit_breaker = DailyCircuitBreaker(config, position_store)
 
         log.info(
             "multi_strategy_engine initialised",
             strategies=[s.name for s in self._strategies],
             count=len(self._strategies),
+            confirm_wait_bars=self._confirm_wait_bars,
+            confirm_expire_min=self._confirm_expire_min,
         )
 
+    # ------------------------------------------------------------------ #
+    # Strategy scoring & selection                                         #
+    # ------------------------------------------------------------------ #
+
     def _get_scores(self) -> Dict[str, float]:
-        """Return composite score [float] per strategy name. Equal (0.0) if no data."""
         if not self._position_store:
             return {s.name: 0.0 for s in self._strategies}
         try:
@@ -66,7 +92,7 @@ class MultiStrategyEngine:
         if not stats:
             return {s.name: 0.0 for s in self._strategies}
 
-        pnls = [v.get("total_pnl", 0.0) for v in stats.values()]
+        pnls    = [v.get("total_pnl", 0.0) for v in stats.values()]
         max_abs = max((abs(p) for p in pnls), default=1.0) or 1.0
 
         scores: Dict[str, float] = {}
@@ -87,7 +113,6 @@ class MultiStrategyEngine:
     ) -> Optional[TradePlan]:
         if not candidates:
             return None
-        # If all candidate scores are equal → round-robin (no performance history yet)
         cand_scores = [scores.get(c.strategy_name, 0.0) for c in candidates]
         if len(set(cand_scores)) == 1:
             idx = self._rr_index % len(candidates)
@@ -95,21 +120,12 @@ class MultiStrategyEngine:
             return candidates[idx]
         return max(candidates, key=lambda p: scores.get(p.strategy_name, 0.0))
 
-    async def _evaluate_strategy(
-        self,
-        strategy: BaseStrategy,
-        symbol: str,
-        bars: List[Dict],
-        contracts: List,
-    ) -> Optional[TradePlan]:
-        try:
-            return strategy.generate_signal(symbol, bars, contracts, self._config)
-        except Exception as exc:
-            log.warning("strategy error", strategy=strategy.name, symbol=symbol, error=str(exc))
-            return None
+    # ------------------------------------------------------------------ #
+    # Filters                                                              #
+    # ------------------------------------------------------------------ #
 
     def _is_trading_hours(self) -> bool:
-        th = self._config.get("trading_hours", {})
+        th        = self._config.get("trading_hours", {})
         start_str = th.get("start", "09:45")
         end_str   = th.get("end", "15:30")
         now = datetime.now().time()
@@ -127,69 +143,41 @@ class MultiStrategyEngine:
             if not bars or len(bars) < 21:
                 return None
             closes = np.asarray([b["close"] for b in bars], dtype=float)
-            sma20 = float(closes[-20:].mean())
-            last  = float(closes[-1])
+            sma20  = float(closes[-20:].mean())
+            last   = float(closes[-1])
             return SignalDirection.CALL if last > sma20 else SignalDirection.PUT
         except Exception:
             return None
 
-    async def _process_chain(self, event: OptionChainEvent) -> None:
-        symbol = event.symbol
+    # ------------------------------------------------------------------ #
+    # Signal confirmation helpers                                          #
+    # ------------------------------------------------------------------ #
 
-        if not self._is_trading_hours():
-            log.debug("outside trading hours, skipping", symbol=symbol)
-            return
+    def _is_pending_expired(self, entry: _PENDING_T) -> bool:
+        elapsed = (datetime.now(timezone.utc) - entry["first_seen_at"]).total_seconds()
+        return elapsed > self._confirm_expire_min * 60
 
-        if self._position_store and self._position_store.is_on_cooldown(symbol, self._cooldown_min):
-            log.debug("signal cooldown active", symbol=symbol)
-            return
-
-        if self._position_store and symbol in self._position_store.symbols():
-            log.debug("already in position", symbol=symbol)
-            return
-
+    async def _evaluate_strategy(
+        self,
+        strategy: BaseStrategy,
+        symbol: str,
+        bars: List[Dict],
+        contracts: List,
+    ) -> Optional[TradePlan]:
         try:
-            bars = await self._market.get_intraday_bars(
-                symbol, interval="1min", limit=self._lookback + 10
-            )
+            return strategy.generate_signal(symbol, bars, contracts, self._config)
         except Exception as exc:
-            log.debug("bars fetch failed", symbol=symbol, error=str(exc))
-            return
+            log.warning("strategy error", strategy=strategy.name, symbol=symbol, error=str(exc))
+            return None
 
-        if not bars:
-            return
+    # ------------------------------------------------------------------ #
+    # Signal publishing                                                    #
+    # ------------------------------------------------------------------ #
 
-        # Run all strategies concurrently
-        results = await asyncio.gather(
-            *[
-                self._evaluate_strategy(s, symbol, bars, event.contracts)
-                for s in self._strategies
-            ],
-            return_exceptions=False,
-        )
-
-        candidates: List[TradePlan] = [r for r in results if r is not None]
-        if not candidates:
-            log.debug("no signal from any strategy", symbol=symbol)
-            return
-
-        # Filter out signals that go against the broad market trend
-        market_bias = await self._spy_trend()
-        if market_bias is not None:
-            aligned = [c for c in candidates if c.direction == market_bias]
-            if aligned:
-                candidates = aligned
-            else:
-                log.debug("all signals against market trend, skipping", symbol=symbol, bias=market_bias.value)
-                return
-
-        scores = self._get_scores()
-        plan = self._pick_winner(candidates, scores)
-        if plan is None:
-            return
-
+    async def _publish_signal(self, plan: TradePlan) -> None:
+        symbol = plan.symbol
         log.info(
-            "SIGNAL GENERATED",
+            "SIGNAL CONFIRMED — EXECUTING",
             symbol=symbol,
             strategy=plan.strategy_name,
             direction=plan.direction.value,
@@ -197,10 +185,7 @@ class MultiStrategyEngine:
             entry=plan.entry_limit,
             stop=plan.stop_loss,
             target=plan.take_profit,
-            candidates_count=len(candidates),
-            candidate_strategies=[c.strategy_name for c in candidates],
         )
-
         signal = SignalEvent(trade_plan=plan)
         await self._signal_queue.put(signal)
         if self._tap_queue is not None:
@@ -223,6 +208,133 @@ class MultiStrategyEngine:
                 target=plan.take_profit,
                 rationale=plan.rationale,
             ))
+
+    # ------------------------------------------------------------------ #
+    # Core processing                                                      #
+    # ------------------------------------------------------------------ #
+
+    async def _process_chain(self, event: OptionChainEvent) -> None:
+        symbol = event.symbol
+
+        # ── Gate 1: daily circuit breaker ──────────────────────────────
+        halted, reason = self._circuit_breaker.check()
+        if halted:
+            log.info("circuit_breaker active — no new signals", reason=reason)
+            return
+
+        # ── Gate 2: trading hours ──────────────────────────────────────
+        if not self._is_trading_hours():
+            log.debug("outside trading hours, skipping", symbol=symbol)
+            return
+
+        # ── Gate 3: cooldown / already in position ─────────────────────
+        if self._position_store and self._position_store.is_on_cooldown(symbol, self._cooldown_min):
+            log.debug("signal cooldown active", symbol=symbol)
+            return
+
+        if self._position_store and symbol in self._position_store.symbols():
+            log.debug("already in position", symbol=symbol)
+            return
+
+        # ── Fetch bars ─────────────────────────────────────────────────
+        try:
+            bars = await self._market.get_intraday_bars(
+                symbol, interval="1min", limit=self._lookback + 10
+            )
+        except Exception as exc:
+            log.debug("bars fetch failed", symbol=symbol, error=str(exc))
+            return
+
+        if not bars:
+            return
+
+        # ── Handle pending confirmation ────────────────────────────────
+        if symbol in self._pending:
+            entry = self._pending[symbol]
+
+            if self._is_pending_expired(entry):
+                log.debug("pending signal expired — discarding", symbol=symbol,
+                          strategy=entry["strategy_name"])
+                del self._pending[symbol]
+                # fall through to re-evaluate fresh
+            else:
+                # Re-run the originally selected strategy with fresh data
+                strategy = next(
+                    (s for s in self._strategies if s.name == entry["strategy_name"]), None
+                )
+                if strategy:
+                    fresh_plan = await self._evaluate_strategy(
+                        strategy, symbol, bars, event.contracts
+                    )
+                    if fresh_plan and fresh_plan.direction == entry["direction"]:
+                        entry["confirmations"] += 1
+                        entry["plan"] = fresh_plan  # use latest prices
+                        log.debug(
+                            "signal confirmation",
+                            symbol=symbol,
+                            strategy=entry["strategy_name"],
+                            confirmations=entry["confirmations"],
+                            needed=self._confirm_wait_bars,
+                        )
+                        if entry["confirmations"] >= self._confirm_wait_bars:
+                            del self._pending[symbol]
+                            await self._publish_signal(fresh_plan)
+                    else:
+                        log.debug(
+                            "signal not confirmed — discarding",
+                            symbol=symbol,
+                            strategy=entry["strategy_name"],
+                        )
+                        del self._pending[symbol]
+                return  # don't generate a new signal while one is pending
+
+        # ── Run all strategies concurrently ────────────────────────────
+        results = await asyncio.gather(
+            *[
+                self._evaluate_strategy(s, symbol, bars, event.contracts)
+                for s in self._strategies
+            ],
+            return_exceptions=False,
+        )
+
+        candidates: List[TradePlan] = [r for r in results if r is not None]
+        if not candidates:
+            log.debug("no signal from any strategy", symbol=symbol)
+            return
+
+        # ── Market trend filter ────────────────────────────────────────
+        market_bias = await self._spy_trend()
+        if market_bias is not None:
+            aligned = [c for c in candidates if c.direction == market_bias]
+            if aligned:
+                candidates = aligned
+            else:
+                log.debug("all signals against market trend, skipping",
+                          symbol=symbol, bias=market_bias.value)
+                return
+
+        scores = self._get_scores()
+        plan   = self._pick_winner(candidates, scores)
+        if plan is None:
+            return
+
+        # ── Queue for confirmation (don't execute immediately) ─────────
+        log.info(
+            "SIGNAL PENDING CONFIRMATION",
+            symbol=symbol,
+            strategy=plan.strategy_name,
+            direction=plan.direction.value,
+            confirmations_needed=self._confirm_wait_bars,
+        )
+        self._pending[symbol] = {
+            "plan":          plan,
+            "strategy_name": plan.strategy_name,
+            "direction":     plan.direction,
+            "confirmations": 0,
+            "first_seen_at": datetime.now(timezone.utc),
+        }
+
+    # ------------------------------------------------------------------ #
 
     async def run(self) -> None:
         log.info("multi_strategy_engine started", strategies=len(self._strategies))
