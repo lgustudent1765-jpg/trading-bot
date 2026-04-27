@@ -85,6 +85,15 @@ export interface ConfigPayload {
   notify_email_recipient?: string;
   notify_webhook_enabled?: boolean;
   notify_webhook_url?: string;
+  // circuit breaker
+  cb_daily_profit_target_pct?: number;
+  cb_daily_loss_limit_pct?: number;
+  // signal confirmation
+  confirm_wait_bars?: number;
+  confirm_expire_minutes?: number;
+  // trading hours
+  trading_hours_start?: string;
+  trading_hours_end?: string;
   webull_device_id?: string;
   webull_access_token?: string;
   webull_refresh_token?: string;

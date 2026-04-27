@@ -52,6 +52,12 @@ _POSITIVE_FLOAT_FIELDS = {
     "risk_max_position_pct",
     "risk_stop_loss_atr_mult",
     "risk_take_profit_atr_mult",
+    "cb_daily_profit_target_pct",
+    "cb_daily_loss_limit_pct",
+    "confirm_expire_minutes",
+}
+_POSITIVE_INT_FIELDS_EXTENDED = {
+    "confirm_wait_bars",
 }
 # H-2: permitted webhook domains
 _ALLOWED_WEBHOOK_HOSTS = {"discord.com", "discordapp.com", "hooks.slack.com"}
@@ -316,6 +322,9 @@ def create_app(
         notif = cfg.get("notifications", {})
         email = notif.get("email", {})
         webhook = notif.get("webhook", {})
+        cb = cfg.get("circuit_breaker", {})
+        confirm = cfg.get("confirmation", {})
+        trading_hours = cfg.get("trading_hours", {})
         return web.json_response({
             "mode": cfg.get("mode", "paper"),
             "broker_name": broker.get("name", "mock"),
@@ -344,6 +353,15 @@ def create_app(
             "webull_refresh_token": _mask(wb.get("refresh_token", "")),
             "webull_trade_token":   _mask(wb.get("trade_token", "")),
             "webull_account_id_set": bool(wb.get("account_id", "")),
+            # circuit breaker
+            "cb_daily_profit_target_pct": float(cb.get("daily_profit_target_pct", 0.30)),
+            "cb_daily_loss_limit_pct":    float(cb.get("daily_loss_limit_pct", 0.20)),
+            # signal confirmation
+            "confirm_wait_bars":      int(confirm.get("wait_bars", 2)),
+            "confirm_expire_minutes": float(confirm.get("expire_minutes", 10)),
+            # trading hours
+            "trading_hours_start": trading_hours.get("start", "09:45"),
+            "trading_hours_end":   trading_hours.get("end", "15:30"),
         })
 
     async def post_config_endpoint(request: web.Request) -> web.Response:
@@ -363,6 +381,16 @@ def create_app(
                 return web.json_response(
                     {"error": f"{field} must be one of {sorted(allowed)}"}, status=422
                 )
+
+        # C-2: positive integer validation (extended fields)
+        for field in _POSITIVE_INT_FIELDS_EXTENDED:
+            if field in body:
+                try:
+                    v = int(body[field])
+                except (TypeError, ValueError):
+                    return web.json_response({"error": f"{field} must be a positive integer"}, status=422)
+                if v < 1:
+                    return web.json_response({"error": f"{field} must be >= 1"}, status=422)
 
         # C-2: positive integer validation
         for field in _POSITIVE_INT_FIELDS:
@@ -438,6 +466,15 @@ def create_app(
             "webull_refresh_token":         ["broker", "webull", "refresh_token"],
             "webull_trade_token":           ["broker", "webull", "trade_token"],
             "webull_account_id":            ["broker", "webull", "account_id"],
+            # circuit breaker
+            "cb_daily_profit_target_pct":   ["circuit_breaker", "daily_profit_target_pct"],
+            "cb_daily_loss_limit_pct":      ["circuit_breaker", "daily_loss_limit_pct"],
+            # signal confirmation
+            "confirm_wait_bars":            ["confirmation", "wait_bars"],
+            "confirm_expire_minutes":       ["confirmation", "expire_minutes"],
+            # trading hours
+            "trading_hours_start":          ["trading_hours", "start"],
+            "trading_hours_end":            ["trading_hours", "end"],
         }
 
         for flat_key, path in mapping.items():

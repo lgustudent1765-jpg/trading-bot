@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle, AlertTriangle, Trash2 } from "lucide-react";
+import { Radio, Database, ShieldCheck, Bell, Save, RefreshCw, Info, Send, CheckCircle, XCircle, AlertTriangle, Trash2, ShieldAlert, Clock } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, type ConfigPayload } from "@/lib/api";
@@ -141,7 +141,7 @@ function Toggle({
 
 // ─── page ────────────────────────────────────────────────────────────────────
 
-type SectionKey = "broker" | "market" | "risk" | "notify";
+type SectionKey = "broker" | "market" | "risk" | "protection" | "notify";
 
 type SavingState = Record<SectionKey, boolean>;
 type SavedState  = Record<SectionKey, boolean>;
@@ -152,8 +152,8 @@ export default function SettingsPage() {
   const [error, setError]         = useState("");
   const [saveError, setSaveError] = useState("");
   const [maskedFields, setMaskedFields] = useState<Set<keyof ConfigPayload>>(new Set());
-  const [saving, setSaving] = useState<SavingState>({ broker: false, market: false, risk: false, notify: false });
-  const [saved,  setSaved]  = useState<SavedState>({ broker: false, market: false, risk: false, notify: false });
+  const [saving, setSaving] = useState<SavingState>({ broker: false, market: false, risk: false, protection: false, notify: false });
+  const [saved,  setSaved]  = useState<SavedState>({ broker: false, market: false, risk: false, protection: false, notify: false });
   const [testingEmail, setTestingEmail] = useState(false);
   const [testResult,   setTestResult]   = useState<{ ok: boolean; message: string } | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -482,6 +482,123 @@ export default function SettingsPage() {
               onChange={(e) => set("risk_take_profit_atr_mult", Number(e.target.value))}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Circuit Breaker & Signal Confirmation ── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <SectionHeader
+            icon={<ShieldAlert className="w-4 h-4 text-amber-400" />}
+            title="Circuit Breaker & Signal Confirmation"
+            saving={saving.protection}
+            saved={saved.protection}
+            onSave={() => save("protection", {
+              cb_daily_profit_target_pct: cfg.cb_daily_profit_target_pct,
+              cb_daily_loss_limit_pct:    cfg.cb_daily_loss_limit_pct,
+              confirm_wait_bars:          cfg.confirm_wait_bars,
+              confirm_expire_minutes:     cfg.confirm_expire_minutes,
+              trading_hours_start:        cfg.trading_hours_start,
+              trading_hours_end:          cfg.trading_hours_end,
+            })}
+          />
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {/* Circuit Breaker */}
+          <div>
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+              Daily Circuit Breaker
+            </p>
+            <p className="text-xs text-zinc-500 mb-3 leading-relaxed">
+              Halts all new trades for the rest of the day when daily profit or loss hits the threshold.
+              Resets automatically at midnight.
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Stop trading when profit ≥"
+                type="number"
+                min={1}
+                max={500}
+                step={1}
+                suffix="%"
+                value={Math.round(((cfg.cb_daily_profit_target_pct ?? 0.30) * 100))}
+                onChange={(e) => set("cb_daily_profit_target_pct", Number(e.target.value) / 100)}
+              />
+              <Input
+                label="Stop trading when loss ≥"
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                suffix="%"
+                value={Math.round(((cfg.cb_daily_loss_limit_pct ?? 0.20) * 100))}
+                onChange={(e) => set("cb_daily_loss_limit_pct", Number(e.target.value) / 100)}
+              />
+            </div>
+          </div>
+
+          {/* Signal Confirmation */}
+          <div className="border-t border-zinc-800 pt-4">
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+              Signal Confirmation Delay
+            </p>
+            <p className="text-xs text-zinc-500 mb-3 leading-relaxed">
+              A signal must be seen this many times in a row before a trade is placed.
+              This prevents acting on short-lived noise or overconfident one-off signals.
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Confirmations required"
+                type="number"
+                min={1}
+                max={10}
+                step={1}
+                suffix="bars"
+                value={cfg.confirm_wait_bars ?? 2}
+                onChange={(e) => set("confirm_wait_bars", Number(e.target.value))}
+              />
+              <Input
+                label="Expire unconfirmed signal after"
+                type="number"
+                min={1}
+                max={60}
+                step={1}
+                suffix="min"
+                value={cfg.confirm_expire_minutes ?? 10}
+                onChange={(e) => set("confirm_expire_minutes", Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          {/* Trading Hours */}
+          <div className="border-t border-zinc-800 pt-4">
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              Trading Hours Window
+            </p>
+            <p className="text-xs text-zinc-500 mb-3 leading-relaxed">
+              No signals will be generated outside this window. Avoids wide spreads at open/close.
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Start (ET)"
+                type="time"
+                value={cfg.trading_hours_start ?? "09:45"}
+                onChange={(e) => set("trading_hours_start", e.target.value)}
+              />
+              <Input
+                label="End (ET)"
+                type="time"
+                value={cfg.trading_hours_end ?? "15:30"}
+                onChange={(e) => set("trading_hours_end", e.target.value)}
+              />
+            </div>
+          </div>
+
+          <Note>
+            Recommended: profit target 30–100%, loss limit 10–20%, confirmations 2–3 bars.
+            Higher confirmation count = fewer but higher-quality signals.
+          </Note>
         </CardContent>
       </Card>
 
