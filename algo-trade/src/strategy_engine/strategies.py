@@ -71,12 +71,15 @@ def _build_plan(
     rationale: str,
 ) -> TradePlan:
     entry = round(contract.ask * 1.01, 2)
+    # Stop/TP as % of option premium (ATR of underlying is irrelevant to option price)
+    sl_pct = 0.50  # exit if option loses 50% of entry value
+    tp_pct = 1.00  # exit if option doubles (2:1 R:R)
     if direction == SignalDirection.CALL:
-        stop = round(entry - atr_val * sl_mult, 2)
-        tp   = round(entry + atr_val * tp_mult, 2)
+        stop = round(entry * (1 - sl_pct), 2)
+        tp   = round(entry * (1 + tp_pct), 2)
     else:
-        stop = round(entry + atr_val * sl_mult, 2)
-        tp   = round(entry - atr_val * tp_mult, 2)
+        stop = round(entry * (1 + sl_pct), 2)
+        tp   = round(entry * (1 - tp_pct), 2)
     return TradePlan(
         symbol=symbol,
         direction=direction,
@@ -210,10 +213,12 @@ class BollingerBandBreakoutStrategy(BaseStrategy):
         last_close = closes[-1]
         prev_close = closes[-2]
 
+        # Fade the breakout: price above upper band → likely overextended → PUT
+        # Price below lower band → likely oversold → CALL
         if prev_close <= upper and last_close > upper:
-            direction = SignalDirection.CALL
-        elif prev_close >= lower and last_close < lower:
             direction = SignalDirection.PUT
+        elif prev_close >= lower and last_close < lower:
+            direction = SignalDirection.CALL
         else:
             return None
 
@@ -232,7 +237,7 @@ class BollingerBandBreakoutStrategy(BaseStrategy):
 class MomentumStrategy(BaseStrategy):
     name = "Momentum"
     _LOOKBACK = 5
-    _THRESHOLD_PCT = 0.005  # 0.5%
+    _THRESHOLD_PCT = 0.015  # 1.5% — raised from 0.5% to reduce noise signals
 
     def generate_signal(self, symbol, bars, contracts, config):
         risk = config.get("risk", {})
@@ -310,7 +315,7 @@ class MeanReversionStrategy(BaseStrategy):
 
 class VWAPStrategy(BaseStrategy):
     name = "VWAP"
-    _THRESHOLD_PCT = 0.003  # 0.3% from VWAP
+    _THRESHOLD_PCT = 0.008  # 0.8% from VWAP — raised from 0.3% to reduce noise signals
 
     def generate_signal(self, symbol, bars, contracts, config):
         risk = config.get("risk", {})

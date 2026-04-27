@@ -3,6 +3,10 @@ api_server:
   port: 8181
 broker:
   name: mock
+  robinhood:
+    mfa_code: ''
+    password: ''
+    username: ''
   webull:
     access_token: ''
     account_id: ''
@@ -20,7 +24,7 @@ indicators:
   rsi_overbought: 70
   rsi_oversold: 30
   rsi_period: 14
-  signal_cooldown_minutes: 30
+  signal_cooldown_minutes: 60
 logging:
   json_format: true
   level: INFO
@@ -32,19 +36,19 @@ market_data:
   retry_backoff: 2.0
   retry_max: 3
 mode: paper
-paper_trading:
-  initial_capital: 1000
 notifications:
   email:
+    api_key: ''
     enabled: true
     password: testpass
+    provider: smtp
     recipient: recv@gmail.com
     smtp_host: smtp.gmail.com
     smtp_port: 587
     username: test@gmail.com
   webhook:
     enabled: false
-    url: ''
+    url: https://discord.com/api/webhooks/123/abc
 options_filter:
   max_dte: 30
   max_otm_pct: 0.15
@@ -52,14 +56,21 @@ options_filter:
   min_dte: 1
   min_open_interest: 500
   min_volume: 100
+paper_trading:
+  initial_capital: 1000
 risk:
-  max_open_positions: 20
-  max_position_pct: 0.25
+  max_open_positions: 5
+  max_position_pct: 0.02
+  stop_loss_pct: 0.50
+  take_profit_pct: 1.00
   pdt_equity_threshold: 25000
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 3.0
 screener:
   market_hours_only: false
   poll_interval_seconds: 60
-  provider: mock
+trading_hours:
+  start: "09:45"
+  end: "15:30"
+  provider: yahoo
   top_n: 10

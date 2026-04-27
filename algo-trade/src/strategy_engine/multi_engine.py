@@ -11,9 +11,12 @@ Selection logic:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, time
 from typing import Any, Dict, List, Optional
 
-from src.events import OptionChainEvent, SignalEvent, TradePlan
+import numpy as np
+
+from src.events import OptionChainEvent, SignalEvent, SignalDirection, TradePlan
 from src.logger import get_logger
 from src.market_adapter.base import MarketDataAdapter
 from src.strategy_engine.strategies import ALL_STRATEGIES, BaseStrategy
@@ -105,8 +108,37 @@ class MultiStrategyEngine:
             log.warning("strategy error", strategy=strategy.name, symbol=symbol, error=str(exc))
             return None
 
+    def _is_trading_hours(self) -> bool:
+        th = self._config.get("trading_hours", {})
+        start_str = th.get("start", "09:45")
+        end_str   = th.get("end", "15:30")
+        now = datetime.now().time()
+        try:
+            start = time(*[int(p) for p in start_str.split(":")])
+            end   = time(*[int(p) for p in end_str.split(":")])
+        except Exception:
+            return True
+        return start <= now <= end
+
+    async def _spy_trend(self) -> Optional[SignalDirection]:
+        """Return CALL if SPY > SMA20, PUT if SPY < SMA20, None if unavailable."""
+        try:
+            bars = await self._market.get_intraday_bars("SPY", interval="1min", limit=25)
+            if not bars or len(bars) < 21:
+                return None
+            closes = np.asarray([b["close"] for b in bars], dtype=float)
+            sma20 = float(closes[-20:].mean())
+            last  = float(closes[-1])
+            return SignalDirection.CALL if last > sma20 else SignalDirection.PUT
+        except Exception:
+            return None
+
     async def _process_chain(self, event: OptionChainEvent) -> None:
         symbol = event.symbol
+
+        if not self._is_trading_hours():
+            log.debug("outside trading hours, skipping", symbol=symbol)
+            return
 
         if self._position_store and self._position_store.is_on_cooldown(symbol, self._cooldown_min):
             log.debug("signal cooldown active", symbol=symbol)
@@ -140,6 +172,16 @@ class MultiStrategyEngine:
         if not candidates:
             log.debug("no signal from any strategy", symbol=symbol)
             return
+
+        # Filter out signals that go against the broad market trend
+        market_bias = await self._spy_trend()
+        if market_bias is not None:
+            aligned = [c for c in candidates if c.direction == market_bias]
+            if aligned:
+                candidates = aligned
+            else:
+                log.debug("all signals against market trend, skipping", symbol=symbol, bias=market_bias.value)
+                return
 
         scores = self._get_scores()
         plan = self._pick_winner(candidates, scores)
