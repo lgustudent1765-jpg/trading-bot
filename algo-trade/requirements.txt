@@ -26,12 +26,28 @@ flake8==7.0.0
 black==24.4.2
 isort==5.13.2
 pre-commit>=3.7.0
+radon>=6.0          # cyclomatic complexity
+semgrep>=1.0        # deep static analysis
+
+# Security
+bandit>=1.9         # Python security linter
+safety>=3.0         # CVE check for dependencies
+pip-audit>=2.0      # Google-backed dependency audit
 
 # Config validation
 pydantic>=2.0
 
 # Retry logic
 tenacity>=8.0
+
+# Documentation
+pdoc>=16.0
+
+# Versioning & changelog
+commitizen>=4.0
+
+# Mutation testing (Linux/macOS/WSL only — not native Windows)
+# mutmut>=3.0
 
 # Optional: Webull broker (comment out if not using)
 # webull==0.2.16

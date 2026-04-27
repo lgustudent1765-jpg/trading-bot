@@ -110,3 +110,51 @@ class TestLiquidityFilter:
     def test_days_to_expiry_past_date(self):
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         assert _days_to_expiry(yesterday) == 0
+
+
+class TestIVFilter:
+    def test_normal_iv_passes(self):
+        c = _make_contract(iv=0.35)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 1
+
+    def test_high_iv_excluded(self):
+        """IV=1.50 (150%) is overpriced — theta will destroy the position."""
+        c = _make_contract(iv=1.50)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 0
+
+    def test_low_iv_excluded(self):
+        """IV=0.05 (5%) has almost no premium — correct move won't pay."""
+        c = _make_contract(iv=0.05)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 0
+
+    def test_iv_at_max_boundary_passes(self):
+        """IV exactly at the max (0.80) should pass."""
+        c = _make_contract(iv=0.80)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 1
+
+    def test_iv_at_min_boundary_passes(self):
+        """IV exactly at the min (0.10) should pass."""
+        c = _make_contract(iv=0.10)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 1
+
+    def test_zero_iv_skips_check(self):
+        """IV=0 means broker didn't supply it — don't filter based on missing data."""
+        c = _make_contract(iv=0.0)
+        result = apply_liquidity_filter([c], spot=150.0, min_iv=0.10, max_iv=0.80)
+        assert len(result) == 1
+
+    def test_mixed_iv_chain(self):
+        """Only contracts in the IV window survive."""
+        cheap = _make_contract(strike=148.0, iv=0.35)   # good
+        pricey = _make_contract(strike=150.0, iv=0.95)  # too expensive
+        stale = _make_contract(strike=152.0, iv=0.04)   # too low
+        result = apply_liquidity_filter(
+            [cheap, pricey, stale], spot=150.0, min_iv=0.10, max_iv=0.80
+        )
+        assert len(result) == 1
+        assert result[0].strike == 148.0

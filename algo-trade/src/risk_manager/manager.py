@@ -105,25 +105,18 @@ class RiskManager:
             )
             return False, f"max open positions reached ({self.open_position_count}/{self._max_open})"
 
-        # Check stop-loss / take-profit are logically consistent.
-        if plan.direction == SignalDirection.CALL:
-            if not (plan.stop_loss < plan.entry_limit < plan.take_profit):
-                log.warning(
-                    "invalid SL/TP for CALL",
-                    sl=plan.stop_loss,
-                    entry=plan.entry_limit,
-                    tp=plan.take_profit,
-                )
-                return False, f"invalid SL/TP: stop={plan.stop_loss} entry={plan.entry_limit} tp={plan.take_profit}"
-        else:
-            if not (plan.take_profit < plan.entry_limit < plan.stop_loss):
-                log.warning(
-                    "invalid SL/TP for PUT",
-                    sl=plan.stop_loss,
-                    entry=plan.entry_limit,
-                    tp=plan.take_profit,
-                )
-                return False, f"invalid SL/TP: stop={plan.stop_loss} entry={plan.entry_limit} tp={plan.take_profit}"
+        # We are always LONG the option (buy call or buy put).
+        # Option profit = price rises, loss = price drops — same for both directions.
+        # Valid layout is always: stop_loss < entry_limit < take_profit.
+        if not (plan.stop_loss < plan.entry_limit < plan.take_profit):
+            log.warning(
+                "invalid SL/TP",
+                direction=plan.direction.value,
+                sl=plan.stop_loss,
+                entry=plan.entry_limit,
+                tp=plan.take_profit,
+            )
+            return False, f"invalid SL/TP: stop={plan.stop_loss} entry={plan.entry_limit} tp={plan.take_profit}"
 
         # Position sizing: 1 contract = 100 shares.
         max_capital = equity * self._max_pos_pct

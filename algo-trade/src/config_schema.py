@@ -28,6 +28,8 @@ class OptionsFilterConfig(BaseModel):
     max_dte: int = Field(30, ge=1)
     min_dte: int = Field(1, ge=0)
     max_otm_pct: float = Field(0.15, gt=0, le=1.0)
+    min_iv: float = Field(0.10, ge=0.0, le=1.0)
+    max_iv: float = Field(0.80, gt=0.0, le=5.0)
 
 
 class IndicatorsConfig(BaseModel):
@@ -40,6 +42,7 @@ class IndicatorsConfig(BaseModel):
     atr_period: int = Field(14, ge=1)
     lookback_bars: int = Field(50, ge=10)
     signal_cooldown_minutes: int = Field(30, ge=0)
+    volume_confirm_mult: float = Field(1.2, ge=0.0)
 
     @field_validator("macd_slow")
     @classmethod

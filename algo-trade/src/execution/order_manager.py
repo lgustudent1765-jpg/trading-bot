@@ -159,123 +159,115 @@ class OrderManager:
         else:
             self._open_orders[order.order_id] = signal
 
+    async def _get_current_mid(self, plan: Any) -> Optional[float]:
+        """Fetch the current mid price for the open contract. Returns None if not found."""
+        if self._market is not None:
+            try:
+                quote = await self._market.get_quote(plan.symbol)
+                underlying_price = quote.price
+            except Exception:
+                underlying_price = plan.contract.underlying_price
+        else:
+            underlying_price = plan.contract.underlying_price
+
+        chain = await self._broker.get_option_chain(plan.symbol, underlying_price=underlying_price)
+        contract = next(
+            (c for c in chain
+             if c.expiry == plan.contract.expiry
+             and c.strike == plan.contract.strike
+             and c.option_type == plan.contract.option_type),
+            None,
+        )
+        return contract.mid_price if contract is not None else None
+
+    @staticmethod
+    def _check_exit_trigger(mid: float, plan: Any) -> Optional[str]:
+        """Return exit reason string or None. Long option: stop=price drops, tp=price rises."""
+        if mid <= plan.stop_loss:
+            return "STOP_LOSS"
+        if mid >= plan.take_profit:
+            return "TAKE_PROFIT"
+        return None
+
+    async def _close_position(
+        self,
+        entry_order: OrderEvent,
+        plan: Any,
+        option_symbol: str,
+        exit_reason: str,
+        mid: float,
+    ) -> None:
+        """Place the closing sell order and record PnL, risk, persistence, and notification."""
+        entry_fill = entry_order.avg_fill_price
+        exit_order = await self._broker.place_limit_order(
+            option_symbol=option_symbol,
+            side=OrderSide.SELL.value,
+            quantity=entry_order.filled_qty,
+            limit_price=round(mid * 0.99, 2),
+        )
+        if exit_order.status != OrderStatus.FILLED:
+            log.warning("exit order not filled — skipping P&L record",
+                        option_symbol=option_symbol, status=exit_order.status)
+            return
+
+        # Long option (both CALL and PUT): profit = exit price above entry.
+        pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
+        pnl_sign = "+" if pnl >= 0 else ""
+        strategy_name = getattr(plan, "strategy_name", "")
+
+        self._risk.register_close(option_symbol)
+        self._record_action(
+            "POSITION_CLOSED", plan.symbol,
+            f"{exit_reason}: SELL {option_symbol} @ ${exit_order.avg_fill_price:.2f} "
+            f"(P&L: {pnl_sign}${pnl:.2f})",
+            {"option_symbol": option_symbol, "reason": exit_reason,
+             "entry": entry_fill, "exit": exit_order.avg_fill_price,
+             "pnl": round(pnl, 2), "strategy": strategy_name},
+        )
+
+        if self._position_store:
+            self._position_store.remove_position(option_symbol)
+            self._position_store.record_strategy_result(strategy_name, pnl)
+
+        if self._notifier:
+            _n = asyncio.create_task(self._notifier.closed(
+                symbol=plan.symbol, reason=exit_reason,
+                entry=entry_fill, exit_price=exit_order.avg_fill_price, pnl=pnl,
+            ))
+            _n.add_done_callback(
+                lambda t: log.error("notifier.closed failed", error=str(t.exception()))
+                if t.done() and not t.cancelled() and t.exception() else None
+            )
+
+        log.info("position closed", reason=exit_reason, symbol=plan.symbol,
+                 entry=entry_fill, exit=exit_order.avg_fill_price, pnl=round(pnl, 2))
+
     async def _monitor_stop(
         self,
         entry_order: OrderEvent,
         plan: Any,
         option_symbol: str,
     ) -> None:
-        entry_fill = entry_order.avg_fill_price
-        log.info(
-            "stop monitor started",
-            symbol=plan.symbol,
-            option_symbol=option_symbol,
-            stop=plan.stop_loss,
-            target=plan.take_profit,
-        )
-        _contract_miss_count = 0
-        _MAX_CONTRACT_MISSES = 30  # 5 minutes at 10s poll before giving up
+        log.info("stop monitor started", symbol=plan.symbol, option_symbol=option_symbol,
+                 stop=plan.stop_loss, target=plan.take_profit)
+        _miss_count = 0
+        _MAX_MISSES = 30  # 5 minutes at 10s poll
         while True:
             await asyncio.sleep(_STOP_POLL_INTERVAL)
             try:
-                if self._market is not None:
-                    try:
-                        quote = await self._market.get_quote(plan.symbol)
-                        current_price = quote.price
-                    except Exception:
-                        current_price = plan.contract.underlying_price
-                else:
-                    current_price = plan.contract.underlying_price
-                chain = await self._broker.get_option_chain(
-                    plan.symbol,
-                    underlying_price=current_price,
-                )
-                contract = next(
-                    (c for c in chain
-                     if c.expiry == plan.contract.expiry
-                     and c.strike == plan.contract.strike
-                     and c.option_type == plan.contract.option_type),
-                    None,
-                )
-                if contract is None:
-                    _contract_miss_count += 1
-                    if _contract_miss_count >= _MAX_CONTRACT_MISSES:
-                        log.warning(
-                            "stop monitor: contract not found after max retries — exiting monitor",
-                            option_symbol=option_symbol,
-                            misses=_contract_miss_count,
-                        )
+                mid = await self._get_current_mid(plan)
+                if mid is None:
+                    _miss_count += 1
+                    if _miss_count >= _MAX_MISSES:
+                        log.warning("stop monitor: contract not found after max retries — exiting",
+                                    option_symbol=option_symbol, misses=_miss_count)
                         return
                     continue
-                _contract_miss_count = 0  # reset on successful lookup
+                _miss_count = 0
 
-                mid = contract.mid_price
-                exit_reason: Optional[str] = None
-
-                from src.events import SignalDirection
-                if plan.direction == SignalDirection.CALL:
-                    if mid <= plan.stop_loss:
-                        exit_reason = "STOP_LOSS"
-                    elif mid >= plan.take_profit:
-                        exit_reason = "TAKE_PROFIT"
-                else:
-                    if mid >= plan.stop_loss:
-                        exit_reason = "STOP_LOSS"
-                    elif mid <= plan.take_profit:
-                        exit_reason = "TAKE_PROFIT"
-
+                exit_reason = self._check_exit_trigger(mid, plan)
                 if exit_reason:
-                    exit_order = await self._broker.place_limit_order(
-                        option_symbol=option_symbol,
-                        side=OrderSide.SELL.value,
-                        quantity=entry_order.filled_qty,
-                        limit_price=round(mid * 0.99, 2),
-                    )
-                    if exit_order.status != OrderStatus.FILLED:
-                        log.warning("exit order not filled — skipping P&L record",
-                                    option_symbol=option_symbol, status=exit_order.status)
-                        return
-                    if plan.direction == SignalDirection.PUT:
-                        pnl = (entry_fill - exit_order.avg_fill_price) * entry_order.filled_qty * 100
-                    else:
-                        pnl = (exit_order.avg_fill_price - entry_fill) * entry_order.filled_qty * 100
-                    self._risk.register_close(option_symbol)
-                    pnl_sign = "+" if pnl >= 0 else ""
-                    strategy_name = getattr(plan, "strategy_name", "")
-                    self._record_action(
-                        "POSITION_CLOSED", plan.symbol,
-                        f"{exit_reason}: SELL {option_symbol} @ ${exit_order.avg_fill_price:.2f} "
-                        f"(P&L: {pnl_sign}${pnl:.2f})",
-                        {"option_symbol": option_symbol, "reason": exit_reason,
-                         "entry": entry_fill, "exit": exit_order.avg_fill_price,
-                         "pnl": round(pnl, 2), "strategy": strategy_name},
-                    )
-
-                    if self._position_store:
-                        self._position_store.remove_position(option_symbol)
-                        self._position_store.record_strategy_result(strategy_name, pnl)
-
-                    if self._notifier:
-                        _n = asyncio.create_task(self._notifier.closed(
-                            symbol=plan.symbol,
-                            reason=exit_reason,
-                            entry=entry_fill,
-                            exit_price=exit_order.avg_fill_price,
-                            pnl=pnl,
-                        ))
-                        _n.add_done_callback(
-                            lambda t: log.error("notifier.closed failed", error=str(t.exception()))
-                            if t.done() and not t.cancelled() and t.exception() else None
-                        )
-
-                    log.info(
-                        "position closed",
-                        reason=exit_reason,
-                        symbol=plan.symbol,
-                        entry=entry_fill,
-                        exit=exit_order.avg_fill_price,
-                        pnl=round(pnl, 2),
-                    )
+                    await self._close_position(entry_order, plan, option_symbol, exit_reason, mid)
                     return
 
             except asyncio.CancelledError:

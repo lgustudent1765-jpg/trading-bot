@@ -23,6 +23,7 @@ from src.events import (
 )
 from src.market_adapter.mock_market import MockMarketAdapter
 from src.strategy_engine import StrategyEngine
+from src.strategy_engine.strategies import _volume_confirmed
 
 
 def _make_overbought_bars(n: int = 60) -> List[Dict[str, Any]]:
@@ -174,7 +175,24 @@ class TestStrategyEngine:
         assert plan.contract.option_type == "call"
 
     @pytest.mark.asyncio
+    async def test_put_signal_stop_below_entry_target_above(self):
+        """PUT signal must have stop_loss < entry_limit < take_profit (long option)."""
+        bars = _make_oversold_bars(60)
+        chain = _make_chain("AAPL", spot=150.0)
+        signals = await self._run_engine_with_bars(bars, chain)
+        assert len(signals) == 1
+        plan = signals[0].trade_plan
+        assert plan.direction == SignalDirection.PUT
+        assert plan.stop_loss < plan.entry_limit, (
+            f"PUT stop {plan.stop_loss} must be BELOW entry {plan.entry_limit}"
+        )
+        assert plan.entry_limit < plan.take_profit, (
+            f"PUT entry {plan.entry_limit} must be BELOW take_profit {plan.take_profit}"
+        )
+
+    @pytest.mark.asyncio
     async def test_flat_market_generates_no_signal(self):
+
         """Flat prices produce neutral RSI/MACD -> no signal."""
         flat_bars = [
             {
@@ -190,3 +208,38 @@ class TestStrategyEngine:
         chain = _make_chain("AAPL", spot=100.0)
         signals = await self._run_engine_with_bars(flat_bars, chain)
         assert len(signals) == 0
+
+
+class TestVolumeConfirmation:
+    def _make_bars(self, n: int, volume: int) -> list:
+        return [
+            {"close": 100.0 + i, "high": 101.0 + i, "low": 99.0 + i, "volume": volume}
+            for i in range(n)
+        ]
+
+    def test_passes_when_last_bar_volume_above_average(self):
+        bars = self._make_bars(25, volume=1_000_000)
+        bars[-1]["volume"] = 1_300_000  # 30% above average
+        assert _volume_confirmed(bars, lookback=20, mult=1.2) is True
+
+    def test_fails_when_last_bar_volume_below_threshold(self):
+        bars = self._make_bars(25, volume=1_000_000)
+        bars[-1]["volume"] = 500_000  # 50% of average — below 1.2× threshold
+        assert _volume_confirmed(bars, lookback=20, mult=1.2) is False
+
+    def test_passes_on_insufficient_history(self):
+        """Too few bars to compute baseline → always pass (don't filter valid setups)."""
+        bars = self._make_bars(10, volume=100_000)
+        assert _volume_confirmed(bars, lookback=20, mult=1.2) is True
+
+    def test_passes_when_mult_is_zero(self):
+        """mult=0 disables the filter — any volume passes."""
+        bars = self._make_bars(25, volume=1_000_000)
+        bars[-1]["volume"] = 1  # almost no volume
+        assert _volume_confirmed(bars, lookback=20, mult=0.0) is True
+
+    def test_at_exact_threshold_passes(self):
+        """Volume exactly at the threshold (1.2×) should pass."""
+        bars = self._make_bars(25, volume=1_000_000)
+        bars[-1]["volume"] = 1_200_000  # exactly 1.2×
+        assert _volume_confirmed(bars, lookback=20, mult=1.2) is True

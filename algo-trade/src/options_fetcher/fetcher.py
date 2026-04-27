@@ -47,9 +47,11 @@ def apply_liquidity_filter(
     max_dte: int = 30,
     min_dte: int = 1,
     max_otm_pct: float = 0.15,
+    min_iv: float = 0.10,
+    max_iv: float = 0.80,
 ) -> List[OptionContract]:
     """
-    Filter option contracts by liquidity and moneyness thresholds.
+    Filter option contracts by liquidity, moneyness, and implied volatility.
 
     Parameters
     ----------
@@ -61,6 +63,8 @@ def apply_liquidity_filter(
     max_dte            : maximum days to expiry.
     min_dte            : minimum days to expiry.
     max_otm_pct        : maximum fraction OTM allowed.
+    min_iv             : minimum implied volatility (rejects near-zero IV — too little premium).
+    max_iv             : maximum implied volatility (rejects overpriced options — theta destroys edge).
 
     Returns
     -------
@@ -84,6 +88,11 @@ def apply_liquidity_filter(
         if spot > 0:
             otm = abs(c.strike - spot) / spot
             if otm > max_otm_pct:
+                continue
+        # IV filter — only include contracts where IV is in a tradeable range.
+        # IV=0 means the broker didn't supply it; skip the check in that case.
+        if c.implied_volatility > 0:
+            if c.implied_volatility < min_iv or c.implied_volatility > max_iv:
                 continue
         result.append(c)
     return result
@@ -112,6 +121,8 @@ class OptionsFetcher:
         self._max_dte: int = int(flt.get("max_dte", 30))
         self._min_dte: int = int(flt.get("min_dte", 1))
         self._max_otm: float = float(flt.get("max_otm_pct", 0.15))
+        self._min_iv: float = float(flt.get("min_iv", 0.10))
+        self._max_iv: float = float(flt.get("max_iv", 0.80))
 
     async def _process_candidate(self, symbol: str, spot: float) -> None:
         """Fetch and filter options for a single symbol."""
@@ -126,6 +137,8 @@ class OptionsFetcher:
                 max_dte=self._max_dte,
                 min_dte=self._min_dte,
                 max_otm_pct=self._max_otm,
+                min_iv=self._min_iv,
+                max_iv=self._max_iv,
             )
             if filtered:
                 event = OptionChainEvent(symbol=symbol, contracts=filtered)

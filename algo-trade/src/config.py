@@ -115,6 +115,8 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
             "max_dte": 30,
             "min_dte": 1,
             "max_otm_pct": 0.15,
+            "min_iv": 0.10,
+            "max_iv": 0.80,
         },
         "indicators": {
             "rsi_period": 14,
@@ -126,6 +128,7 @@ def load_config(path: Optional[Path] = None, dotenv: Optional[Path] = None) -> D
             "atr_period": 14,
             "lookback_bars": 50,
             "signal_cooldown_minutes": 30,
+            "volume_confirm_mult": 1.2,
         },
         "risk": {
             "max_position_pct": 0.05,

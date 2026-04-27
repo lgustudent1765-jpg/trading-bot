@@ -38,6 +38,33 @@ def _make_config() -> Dict[str, Any]:
     }
 
 
+def _make_put_signal(entry: float = 2.10, stop: float = 1.05, target: float = 4.20) -> SignalEvent:
+    """PUT signal with correct long-option layout: stop < entry < target."""
+    expiry = (date.today() + timedelta(days=14)).isoformat()
+    contract = OptionContract(
+        symbol="AAPL",
+        expiry=expiry,
+        strike=150.0,
+        option_type="put",
+        bid=2.00,
+        ask=2.10,
+        volume=1000,
+        open_interest=5000,
+        implied_volatility=0.35,
+        underlying_price=150.0,
+    )
+    plan = TradePlan(
+        symbol="AAPL",
+        direction=SignalDirection.PUT,
+        contract=contract,
+        entry_limit=entry,
+        stop_loss=stop,
+        take_profit=target,
+        position_size=1,
+    )
+    return SignalEvent(trade_plan=plan)
+
+
 def _make_call_signal(entry: float = 2.10, stop: float = 1.50, target: float = 3.50) -> SignalEvent:
     expiry = (date.today() + timedelta(days=14)).isoformat()
     contract = OptionContract(
@@ -148,8 +175,25 @@ class TestRiskManager:
     def test_rejects_inverted_sl_tp(self):
         config = _make_config()
         rm = RiskManager(config)
-        # For CALL: stop must be < entry < target — invert them intentionally.
+        # stop must be < entry < target — invert them intentionally.
         signal = _make_call_signal(entry=2.10, stop=3.50, target=1.50)
+        approved, _ = rm.approve(signal.trade_plan, equity=100_000)
+        assert approved is False
+
+    def test_approves_valid_put_plan(self):
+        """PUT plan with stop < entry < target must be approved (long option layout)."""
+        config = _make_config()
+        rm = RiskManager(config)
+        signal = _make_put_signal(entry=2.10, stop=1.05, target=4.20)
+        approved, reason = rm.approve(signal.trade_plan, equity=100_000)
+        assert approved is True, f"PUT plan rejected: {reason}"
+
+    def test_rejects_put_with_old_inverted_layout(self):
+        """PUT plan with old inverted layout (stop > entry) must be rejected."""
+        config = _make_config()
+        rm = RiskManager(config)
+        # Old buggy layout: stop=3.15 > entry=2.10, tp=0.0 < entry
+        signal = _make_put_signal(entry=2.10, stop=3.15, target=0.01)
         approved, _ = rm.approve(signal.trade_plan, equity=100_000)
         assert approved is False
 
@@ -161,6 +205,84 @@ class TestRiskManager:
         rm.approve(signal.trade_plan, equity=100_000)
         expected = int((100_000 * 0.10) // (2.10 * 100))
         assert signal.trade_plan.position_size == expected
+
+
+class TestCheckExitTrigger:
+    """Unit tests for the static helper — no I/O needed."""
+
+    def test_stop_hit_returns_stop_loss(self):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(stop_loss=1.00, take_profit=4.00)
+        result = OrderManager._check_exit_trigger(0.99, plan)
+        assert result == "STOP_LOSS"
+
+    def test_at_stop_boundary_returns_stop_loss(self):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(stop_loss=1.00, take_profit=4.00)
+        assert OrderManager._check_exit_trigger(1.00, plan) == "STOP_LOSS"
+
+    def test_target_hit_returns_take_profit(self):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(stop_loss=1.00, take_profit=4.00)
+        assert OrderManager._check_exit_trigger(4.00, plan) == "TAKE_PROFIT"
+
+    def test_above_target_returns_take_profit(self):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(stop_loss=1.00, take_profit=4.00)
+        assert OrderManager._check_exit_trigger(5.00, plan) == "TAKE_PROFIT"
+
+    def test_between_stop_and_target_returns_none(self):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(stop_loss=1.00, take_profit=4.00)
+        assert OrderManager._check_exit_trigger(2.50, plan) is None
+
+
+class TestClosePosition:
+    @pytest.mark.asyncio
+    async def test_close_position_records_pnl(self):
+        """Closing a position calculates exit - entry PnL (long option)."""
+        from src.events import OrderEvent, OrderSide
+        import uuid
+
+        config = _make_config()
+        broker = MockBrokerAdapter(equity=100_000)
+        rm = RiskManager(config)
+        action_store: list = []
+        signal_q: asyncio.Queue = asyncio.Queue()
+        mgr = OrderManager(
+            broker, rm, signal_q, mode="paper", config=config,
+            action_store=action_store,
+        )
+
+        expiry = (date.today() + timedelta(days=14)).isoformat()
+        entry_order = OrderEvent(
+            order_id=str(uuid.uuid4())[:8],
+            symbol="AAPL",
+            option_symbol="AAPL_{}_150.0_C".format(expiry),
+            side=OrderSide.BUY,
+            quantity=2,
+            limit_price=2.00,
+            status=OrderStatus.FILLED,
+            filled_qty=2,
+            avg_fill_price=2.00,
+        )
+
+        from types import SimpleNamespace
+        plan = SimpleNamespace(
+            symbol="AAPL",
+            stop_loss=1.00,
+            take_profit=4.00,
+            strategy_name="test_strat",
+        )
+
+        option_symbol = "AAPL_{}_150.0_C".format(expiry)
+        rm.register_open(option_symbol)
+        await mgr._close_position(entry_order, plan, option_symbol, "TAKE_PROFIT", mid=4.00)
+
+        assert any(a["event"] == "POSITION_CLOSED" for a in action_store)
+        close_action = next(a for a in action_store if a["event"] == "POSITION_CLOSED")
+        assert close_action["data"]["reason"] == "TAKE_PROFIT"
+        assert close_action["data"]["pnl"] > 0  # profitable exit (long option)
 
 
 class TestOrderManagerIntegration:

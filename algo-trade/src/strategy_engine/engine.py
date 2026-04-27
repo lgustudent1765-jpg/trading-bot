@@ -110,12 +110,11 @@ class StrategyEngine:
         macd_hist: float,
     ) -> TradePlan:
         entry = round(contract.ask * 1.01, 2)
-        if direction == SignalDirection.CALL:
-            stop = round(entry - atr_val * self._sl_mult, 2)
-            tp   = round(entry + atr_val * self._tp_mult, 2)
-        else:
-            stop = round(entry + atr_val * self._sl_mult, 2)
-            tp   = round(entry - atr_val * self._tp_mult, 2)
+        # We are LONG the option. Profit/loss is measured on option price, not
+        # the underlying. ATR of the underlying cannot be applied to option premium —
+        # use fixed % of entry price instead (same for both directions).
+        stop = round(entry * (1 - self._sl_mult / 10), 2)  # sl_mult=1.5 → 15% stop
+        tp   = round(entry * (1 + self._tp_mult / 10), 2)  # tp_mult=3.0 → 30% target
 
         rationale = (
             f"RSI={rsi_val:.1f}, MACD_hist={macd_hist:.4f}, "

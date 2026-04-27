@@ -49,6 +49,21 @@ def _vwap(bars: List[Dict]) -> float:
     return num / den if den else 0.0
 
 
+def _volume_confirmed(bars: List[Dict], lookback: int = 20, mult: float = 1.2) -> bool:
+    """Return True if the last bar's volume is at least mult × average of prior bars.
+
+    Keeps signals to bars where volume confirms the move (institutional participation).
+    Returns True when there is insufficient history to compute a baseline.
+    """
+    if len(bars) < lookback + 1:
+        return True
+    prior_vols = [b.get("volume", 0) for b in bars[-lookback - 1:-1]]
+    avg = sum(prior_vols) / len(prior_vols)
+    if avg == 0:
+        return True
+    return bars[-1].get("volume", 0) >= mult * avg
+
+
 def _select_contract(
     contracts: List[OptionContract], direction: SignalDirection
 ) -> Optional[OptionContract]:
@@ -71,15 +86,13 @@ def _build_plan(
     rationale: str,
 ) -> TradePlan:
     entry = round(contract.ask * 1.01, 2)
-    # Stop/TP as % of option premium (ATR of underlying is irrelevant to option price)
+    # We are LONG the option (buying calls or puts).
+    # Profit = option price rises. Loss = option price drops.
+    # This is true for both directions — stop and TP are symmetric.
     sl_pct = 0.50  # exit if option loses 50% of entry value
     tp_pct = 1.00  # exit if option doubles (2:1 R:R)
-    if direction == SignalDirection.CALL:
-        stop = round(entry * (1 - sl_pct), 2)
-        tp   = round(entry * (1 + tp_pct), 2)
-    else:
-        stop = round(entry * (1 + sl_pct), 2)
-        tp   = round(entry * (1 - tp_pct), 2)
+    stop = round(entry * (1 - sl_pct), 2)
+    tp   = round(entry * (1 + tp_pct), 2)
     return TradePlan(
         symbol=symbol,
         direction=direction,
@@ -135,6 +148,10 @@ class RSIMACDStrategy(BaseStrategy):
         if len(closes) < required:
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         rsi_val  = rsi(closes, rsi_period)
         macd_res = macd(closes, macd_fast, macd_slow, macd_sig)
         atr_val  = atr(highs, lows, closes, atr_period)
@@ -172,6 +189,10 @@ class EMACrossStrategy(BaseStrategy):
         if len(closes) < max(22, atr_period + 1):
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         ema9  = _ema_series(closes, 9)
         ema21 = _ema_series(closes, 21)
 
@@ -207,6 +228,10 @@ class BollingerBandBreakoutStrategy(BaseStrategy):
         highs  = [b["high"]  for b in bars]
         lows   = [b["low"]   for b in bars]
         if len(closes) < max(21, atr_period + 1):
+            return None
+
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
             return None
 
         upper, _mid, lower = _bollinger(closes, period=20)
@@ -252,6 +277,10 @@ class MomentumStrategy(BaseStrategy):
         if len(closes) < self._LOOKBACK + atr_period + 1:
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         change = (closes[-1] - closes[-self._LOOKBACK]) / closes[-self._LOOKBACK]
         if change > self._THRESHOLD_PCT:
             direction = SignalDirection.CALL
@@ -293,6 +322,10 @@ class MeanReversionStrategy(BaseStrategy):
         if std == 0:
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         z = (closes[-1] - sma) / std
         # Price far above mean → expect drop → PUT; far below → CALL
         if z > 2.0:
@@ -328,6 +361,10 @@ class VWAPStrategy(BaseStrategy):
         highs  = [b["high"]  for b in bars]
         lows   = [b["low"]   for b in bars]
         if len(closes) < atr_period + 1:
+            return None
+
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
             return None
 
         vwap_val = _vwap(bars)
@@ -370,6 +407,10 @@ class RSIAggressiveStrategy(BaseStrategy):
         if len(closes) < max(rsi_period + 1, atr_period + 1):
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         rsi_val = rsi(closes, rsi_period)
         if rsi_val > 80:
             direction = SignalDirection.CALL
@@ -404,6 +445,10 @@ class TrendFollowingStrategy(BaseStrategy):
         highs  = [b["high"]  for b in bars]
         lows   = [b["low"]   for b in bars]
         if len(closes) < max(51, rsi_period + 1, atr_period + 1):
+            return None
+
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
             return None
 
         sma20   = _sma(closes, 20)
@@ -446,6 +491,10 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         if len(closes) < atr_period + 2:
             return None
 
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
+            return None
+
         atr_val    = atr(highs, lows, closes, atr_period)
         last_range = highs[-1] - lows[-1]
         last_move  = closes[-1] - closes[-2]
@@ -483,6 +532,10 @@ class MACDCrossStrategy(BaseStrategy):
         lows   = [b["low"]  for b in bars]
         required = macd_slow + macd_sig + 1
         if len(closes) < max(required, atr_period + 1):
+            return None
+
+        vol_mult = float(ind.get("volume_confirm_mult", 1.2))
+        if not _volume_confirmed(bars, mult=vol_mult):
             return None
 
         fast_ema  = _ema_series(closes, macd_fast)
